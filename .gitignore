@@ -1,0 +1,22 @@
+node_modules/
+dist/
+coverage/
+
+# Code-intelligence indexes (machine-local)
+.julie/
+.julieignore
+.codegraph/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
+
+# Env
+.env
+.env.local
