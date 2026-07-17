@@ -37,6 +37,42 @@ function isNotFound(err: unknown): boolean {
   return (err as NodeJS.ErrnoException | null)?.code === 'ENOENT';
 }
 
+/** Thrown when the backlog cannot be written after exhausting retries. */
+export class BacklogWriteError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'BacklogWriteError';
+  }
+}
+
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+// On Windows, rename-over-existing can transiently fail with EPERM/EACCES when
+// the destination is briefly locked (antivirus, search indexer, a just-closed
+// handle), especially under rapid successive writes. These clear within
+// milliseconds, so retry with a short backoff before giving up.
+const TRANSIENT_RENAME_CODES = new Set(['EPERM', 'EACCES', 'EEXIST']);
+
+async function renameWithRetry(from: string, to: string, attempts = 10): Promise<void> {
+  for (let i = 0; ; i++) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code ?? '';
+      if (!TRANSIENT_RENAME_CODES.has(code)) throw err;
+      if (i >= attempts - 1) {
+        throw new BacklogWriteError(
+          `Could not write ${to}: still locked after ${attempts} attempts (${code}). ` +
+            `Another process may be holding the file — close it and try again.`,
+          { cause: err },
+        );
+      }
+      await delay(Math.min(100, 2 ** i));
+    }
+  }
+}
+
 export class BacklogStore {
   private tail: Promise<unknown> = Promise.resolve();
 
@@ -61,7 +97,7 @@ export class BacklogStore {
     const tmp = join(dir, `.${basename(this.filePath)}.${randomUUID()}.tmp`);
     try {
       await writeFile(tmp, text, 'utf8');
-      await rename(tmp, this.filePath);
+      await renameWithRetry(tmp, this.filePath);
     } catch (err) {
       await unlink(tmp).catch(() => undefined);
       throw err;
