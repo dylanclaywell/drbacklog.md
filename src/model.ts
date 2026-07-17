@@ -43,11 +43,13 @@ export interface Task {
 export interface Passthrough {
   /** Raw lines before the first index section (below the H1 title). */
   preamble: string[];
-  /** Raw lines between the index zone and the ledger zone, excluding the `---`
-   *  divider (the renderer always emits that). */
-  interstitial: string[];
-  /** Raw lines after the last ledger block. */
-  trailing: string[];
+  /**
+   * Raw lines between the index zone and the ledger's first task: prose after
+   * the `---` divider, or notes sitting above the first `###` block. Excludes
+   * the divider itself (the renderer always emits that). Notes *after* a task's
+   * fields attach to that task's `extraLines` instead.
+   */
+  midNotes: string[];
 }
 
 /** The whole backlog file, parsed into a manipulable model. */
