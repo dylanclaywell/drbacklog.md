@@ -88,12 +88,26 @@ Add the server to your MCP config (e.g. a project-scoped `.mcp.json`):
 The file path is resolved in this order:
 
 1. **`DRBACKLOG_FILE`** environment variable — an explicit path (absolute, or
-   relative to the working directory). Set it in the config's `env` block to
-   pin one shared file.
+   relative to the working directory). Set it in the server's `env` block in
+   `.mcp.json` (shown below) to pin one shared file.
 2. **`CLAUDE_PROJECT_DIR`/backlog.md** — Claude Code sets `CLAUDE_PROJECT_DIR`
    to the project root, so with no configuration each project automatically
    gets its own `backlog.md` — even from a single user-scoped server entry.
 3. **`./backlog.md`** in the current working directory — final fallback.
+
+To pin one shared file, add an `env` block to the server entry:
+
+```json
+{
+  "mcpServers": {
+    "drbacklog": {
+      "command": "node",
+      "args": ["/absolute/path/to/drbacklog.md/dist/index.js"],
+      "env": { "DRBACKLOG_FILE": "/absolute/path/to/shared/backlog.md" }
+    }
+  }
+}
+```
 
 The file is created with an empty skeleton on first run if it doesn't exist.
 
