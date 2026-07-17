@@ -44,15 +44,23 @@ function renderTask(task: Task): string[] {
   return lines;
 }
 
+/** Join blocks with a single blank line between them and a trailing newline. */
+function joinBlocks(blocks: string[][]): string {
+  return blocks.map((block) => block.join('\n')).join('\n\n') + '\n';
+}
+
+/** The three ward index lists, in order. */
+function wardBlocks(doc: BacklogDocument): string[][] {
+  return WARDS.map((ward) => renderWard(ward.status, ward.heading, ward.checkbox, doc.tasks));
+}
+
 export function render(doc: BacklogDocument): string {
   // Each entry is one block; blocks are joined by a single blank line.
   const blocks: string[][] = [[`# ${doc.title}`]];
 
   if (doc.passthrough.preamble.length > 0) blocks.push([...doc.passthrough.preamble]);
 
-  for (const ward of WARDS) {
-    blocks.push(renderWard(ward.status, ward.heading, ward.checkbox, doc.tasks));
-  }
+  blocks.push(...wardBlocks(doc));
 
   blocks.push(['---']);
 
@@ -62,5 +70,14 @@ export function render(doc: BacklogDocument): string {
 
   for (const task of doc.tasks) blocks.push(renderTask(task));
 
-  return blocks.map((block) => block.join('\n')).join('\n\n') + '\n';
+  return joinBlocks(blocks);
+}
+
+/**
+ * Render only the index (title + three ward lists), omitting the ledger. This
+ * is the token-efficient backlog summary — the same top-of-file view the parser
+ * treats as derived.
+ */
+export function renderSummary(doc: BacklogDocument): string {
+  return joinBlocks([[`# ${doc.title}`], ...wardBlocks(doc)]);
 }

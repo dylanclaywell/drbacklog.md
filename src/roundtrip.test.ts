@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { parse } from './parse.js';
-import { render } from './render.js';
+import { render, renderSummary } from './render.js';
 import { DEFAULT_TITLE, LEDGER_HEADING, WARDS } from './model.js';
 import type { BacklogDocument } from './model.js';
 
@@ -111,6 +111,24 @@ describe('round trip', () => {
     expect(doc.passthrough.preamble).toEqual(['A note under the title.']);
     expect(doc.passthrough.midNotes).toEqual(['A note between the index and the ledger.']);
     expect(doc.tasks[0]!.extraLines).toEqual(['* **Priority:** high']);
+  });
+});
+
+describe('renderSummary', () => {
+  it('includes the title, all wards, and index items but not the ledger', () => {
+    const summary = renderSummary(sampleDoc());
+    expect(summary).toContain(`# ${DEFAULT_TITLE}`);
+    for (const ward of WARDS) expect(summary).toContain(`## ${ward.heading}`);
+    expect(summary).toContain('[#101: Implement OAuth2 login](#task-101)');
+    // No ledger content.
+    expect(summary).not.toContain(`## ${LEDGER_HEADING}`);
+    expect(summary).not.toContain('### #101');
+    expect(summary).not.toContain('* **Status:**');
+    expect(summary).not.toContain('<a id=');
+  });
+
+  it('ends with exactly one trailing newline', () => {
+    expect(renderSummary(sampleDoc())).toMatch(/[^\n]\n$/);
   });
 });
 
