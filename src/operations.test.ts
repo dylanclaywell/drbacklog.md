@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { addTask, moveTask, nextId, TaskNotFoundError } from './operations.js';
+import { addTask, moveTask, nextId, TaskNotFoundError, updateTask } from './operations.js';
 import { createEmptyDocument } from './store.js';
 
 function docWithTask(): { doc: ReturnType<typeof createEmptyDocument>; id: number } {
@@ -85,5 +85,34 @@ describe('moveTask', () => {
   it('throws TaskNotFoundError for an unknown id', () => {
     const doc = createEmptyDocument();
     expect(() => moveTask(doc, { id: 999, status: 'DONE' })).toThrow(TaskNotFoundError);
+  });
+});
+
+describe('updateTask', () => {
+  it('updates the title without touching other fields', () => {
+    const { doc, id } = docWithTask();
+    const task = updateTask(doc, { id, field: 'title', value: 'New title' });
+    expect(task.title).toBe('New title');
+    expect(task.description).toBe('desc');
+    expect(task.id).toBe(id);
+  });
+
+  it('updates the description', () => {
+    const { doc, id } = docWithTask();
+    const task = updateTask(doc, { id, field: 'description', value: 'New description' });
+    expect(task.description).toBe('New description');
+  });
+
+  it('sets the resolution on a task that had none', () => {
+    const { doc, id } = docWithTask();
+    const task = updateTask(doc, { id, field: 'resolution', value: 'Fixed it.' });
+    expect(task.resolution).toBe('Fixed it.');
+  });
+
+  it('throws TaskNotFoundError for an unknown id', () => {
+    const doc = createEmptyDocument();
+    expect(() => updateTask(doc, { id: 999, field: 'title', value: 'x' })).toThrow(
+      TaskNotFoundError,
+    );
   });
 });

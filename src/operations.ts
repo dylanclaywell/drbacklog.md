@@ -63,3 +63,29 @@ export function moveTask(doc: BacklogDocument, input: MoveTaskInput): Task {
   }
   return task;
 }
+
+export interface UpdateTaskInput {
+  id: number;
+  field: 'title' | 'description' | 'resolution';
+  value: string;
+}
+
+/**
+ * Update a single text field on a task. Titles need no anchor rework: index
+ * anchors derive from the id, so the renderer stays consistent automatically.
+ */
+export function updateTask(doc: BacklogDocument, input: UpdateTaskInput): Task {
+  const task = findTaskOrThrow(doc, input.id);
+  switch (input.field) {
+    case 'title':
+      task.title = input.value;
+      break;
+    case 'description':
+      task.description = input.value;
+      break;
+    case 'resolution':
+      task.resolution = input.value;
+      break;
+  }
+  return task;
+}
