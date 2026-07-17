@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { addTask, moveTask, nextId, TaskNotFoundError, updateTask } from './operations.js';
+import {
+  addTask,
+  moveTask,
+  nextId,
+  removeTask,
+  TaskNotFoundError,
+  updateTask,
+} from './operations.js';
 import { createEmptyDocument } from './store.js';
 
 function docWithTask(): { doc: ReturnType<typeof createEmptyDocument>; id: number } {
@@ -114,5 +121,30 @@ describe('updateTask', () => {
     expect(() => updateTask(doc, { id: 999, field: 'title', value: 'x' })).toThrow(
       TaskNotFoundError,
     );
+  });
+});
+
+describe('removeTask', () => {
+  it('removes the task and returns it, leaving others intact', () => {
+    const doc = createEmptyDocument();
+    const a = addTask(doc, { title: 'a', description: '', admitted: '2026-07-17' });
+    const b = addTask(doc, { title: 'b', description: '', admitted: '2026-07-17' });
+    const removed = removeTask(doc, a.id);
+    expect(removed).toBe(a);
+    expect(doc.tasks.map((t) => t.id)).toEqual([b.id]);
+  });
+
+  it('throws TaskNotFoundError for an unknown id', () => {
+    const doc = createEmptyDocument();
+    expect(() => removeTask(doc, 999)).toThrow(TaskNotFoundError);
+  });
+
+  it('frees the highest id for reuse by nextId', () => {
+    const doc = createEmptyDocument();
+    addTask(doc, { title: 'a', description: '', admitted: '2026-07-17' });
+    const b = addTask(doc, { title: 'b', description: '', admitted: '2026-07-17' });
+    expect(b.id).toBe(2);
+    removeTask(doc, b.id);
+    expect(nextId(doc)).toBe(2);
   });
 });

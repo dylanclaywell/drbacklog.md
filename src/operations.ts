@@ -89,3 +89,13 @@ export function updateTask(doc: BacklogDocument, input: UpdateTaskInput): Task {
   }
   return task;
 }
+
+/**
+ * Remove a task from the backlog entirely and return it. Note: nextId is
+ * highest-id + 1, so deleting the highest-id task frees that id for reuse.
+ */
+export function removeTask(doc: BacklogDocument, id: number): Task {
+  const task = findTaskOrThrow(doc, id);
+  doc.tasks = doc.tasks.filter((t) => t.id !== id);
+  return task;
+}
