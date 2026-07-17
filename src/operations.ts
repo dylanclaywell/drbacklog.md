@@ -104,3 +104,62 @@ export function removeTask(doc: BacklogDocument, id: number): Task {
 export function getTask(doc: BacklogDocument, id: number): Task | undefined {
   return doc.tasks.find((t) => t.id === id);
 }
+
+export type ExportFormat = 'csv' | 'json';
+
+export interface ExportResult {
+  filename: string;
+  content: string;
+}
+
+interface ExportRow {
+  id: number;
+  title: string;
+  description: string;
+  status: TaskStatus;
+  admitted: string;
+  resolution: string;
+}
+
+const CSV_COLUMNS: readonly (keyof ExportRow)[] = [
+  'id',
+  'title',
+  'description',
+  'status',
+  'admitted',
+  'resolution',
+];
+
+/** Flatten a task to a export row; internal extraLines are omitted. */
+function toRow(task: Task): ExportRow {
+  return {
+    id: task.id,
+    title: task.title,
+    description: task.description,
+    status: task.status,
+    admitted: task.admitted,
+    resolution: task.resolution ?? '',
+  };
+}
+
+/** Quote a CSV field when it contains a comma, quote, or newline. */
+function csvEscape(value: string): string {
+  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+}
+
+function toCsv(rows: ExportRow[]): string {
+  const lines = [CSV_COLUMNS.join(',')];
+  for (const row of rows) {
+    lines.push(CSV_COLUMNS.map((col) => csvEscape(String(row[col]))).join(','));
+  }
+  return lines.join('\n') + '\n';
+}
+
+/** Serialize the backlog for external tools (e.g. Jira import) as CSV or JSON. */
+export function exportBacklog(doc: BacklogDocument, format: ExportFormat): ExportResult {
+  const rows = doc.tasks.map(toRow);
+  if (format === 'json') {
+    return { filename: 'backlog.json', content: JSON.stringify(rows, null, 2) + '\n' };
+  }
+  return { filename: 'backlog.csv', content: toCsv(rows) };
+}

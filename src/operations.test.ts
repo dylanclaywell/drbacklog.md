@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   addTask,
+  exportBacklog,
   getTask,
   moveTask,
   nextId,
@@ -158,5 +159,51 @@ describe('getTask', () => {
 
   it('returns undefined for an unknown id', () => {
     expect(getTask(createEmptyDocument(), 999)).toBeUndefined();
+  });
+});
+
+describe('exportBacklog', () => {
+  it('serializes tasks to JSON with a backlog.json filename', () => {
+    const doc = createEmptyDocument();
+    addTask(doc, { title: 'Login', description: 'OAuth2.', admitted: '2026-07-17' });
+    const { filename, content } = exportBacklog(doc, 'json');
+    expect(filename).toBe('backlog.json');
+    const parsed = JSON.parse(content) as Array<Record<string, unknown>>;
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]).toMatchObject({
+      id: 1,
+      title: 'Login',
+      description: 'OAuth2.',
+      status: 'TODO',
+      admitted: '2026-07-17',
+      resolution: '',
+    });
+  });
+
+  it('serializes tasks to CSV with a header and one row per task', () => {
+    const doc = createEmptyDocument();
+    addTask(doc, { title: 'Login', description: 'OAuth2.', admitted: '2026-07-17' });
+    const { filename, content } = exportBacklog(doc, 'csv');
+    expect(filename).toBe('backlog.csv');
+    const lines = content.trimEnd().split('\n');
+    expect(lines[0]).toBe('id,title,description,status,admitted,resolution');
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toBe('1,Login,OAuth2.,TODO,2026-07-17,');
+  });
+
+  it('escapes CSV fields containing commas, quotes, and newlines', () => {
+    const doc = createEmptyDocument();
+    addTask(doc, {
+      title: 'has, comma "and" quote',
+      description: 'line one\nline two',
+      admitted: '2026-07-17',
+    });
+    const { content } = exportBacklog(doc, 'csv');
+    expect(content).toContain('"has, comma ""and"" quote"');
+    expect(content).toContain('"line one\nline two"');
+  });
+
+  it('exports an empty backlog as an empty JSON array', () => {
+    expect(exportBacklog(createEmptyDocument(), 'json').content).toBe('[]\n');
   });
 });
