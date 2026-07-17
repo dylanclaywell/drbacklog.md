@@ -99,3 +99,8 @@ export function removeTask(doc: BacklogDocument, id: number): Task {
   doc.tasks = doc.tasks.filter((t) => t.id !== id);
   return task;
 }
+
+/** Look up a task by id, or undefined if there is no such task. */
+export function getTask(doc: BacklogDocument, id: number): Task | undefined {
+  return doc.tasks.find((t) => t.id === id);
+}

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   addTask,
+  getTask,
   moveTask,
   nextId,
   removeTask,
@@ -146,5 +147,16 @@ describe('removeTask', () => {
     expect(b.id).toBe(2);
     removeTask(doc, b.id);
     expect(nextId(doc)).toBe(2);
+  });
+});
+
+describe('getTask', () => {
+  it('returns the matching task', () => {
+    const { doc, id } = docWithTask();
+    expect(getTask(doc, id)?.id).toBe(id);
+  });
+
+  it('returns undefined for an unknown id', () => {
+    expect(getTask(createEmptyDocument(), 999)).toBeUndefined();
   });
 });
