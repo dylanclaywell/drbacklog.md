@@ -57,20 +57,43 @@ title never breaks the index links.
 Content the parser doesn't recognize (freeform notes, unknown fields) is
 preserved verbatim on a round trip, so hand-edits survive.
 
-## Install & build
+## Install
 
-Requires Node.js ≥ 20.
+Requires Node.js ≥ 20. There are two ways to install; pick one, then see
+[Configure in Claude Code](#configure-in-claude-code) below.
+
+### Option A — from source
+
+Best if you want to track `main` or hack on the server.
 
 ```bash
+git clone https://github.com/dylanclaywell/drbacklog.md
+cd drbacklog.md
 npm install
 npm run build
 ```
 
-This compiles to `dist/`, with the server entrypoint at `dist/index.js`.
+This compiles to `dist/`, with the server entrypoint at `dist/index.js`. Point
+your MCP config at that absolute path (see the `node` example below).
+
+### Option B — from a release tarball
+
+Best for a plain install. Each [GitHub Release](https://github.com/dylanclaywell/drbacklog.md/releases)
+attaches a prebuilt `drbacklog-<version>.tgz` — it already contains the compiled
+`dist/`, so no build step is needed. Download it, then install globally:
+
+```bash
+npm i -g ./drbacklog-<version>.tgz
+```
+
+This puts a `drbacklog` command on your `PATH`; point your MCP config at that
+command name (see the `drbacklog` example below).
 
 ## Configure in Claude Code
 
-Add the server to your MCP config (e.g. a project-scoped `.mcp.json`):
+Add the server to your MCP config (e.g. a project-scoped `.mcp.json`).
+
+**Option A (from source)** — run the built entrypoint with `node`:
 
 ```json
 {
@@ -82,6 +105,23 @@ Add the server to your MCP config (e.g. a project-scoped `.mcp.json`):
   }
 }
 ```
+
+**Option B (global install)** — reference the `drbacklog` command directly:
+
+```json
+{
+  "mcpServers": {
+    "drbacklog": {
+      "command": "drbacklog"
+    }
+  }
+}
+```
+
+> **Windows note:** if the bare `drbacklog` command fails to launch, the global
+> npm shim may not be on the resolved `PATH`. Use its full path instead — the
+> bin lives one directory up from `npm root -g`, typically
+> `C:\Users\<you>\AppData\Roaming\npm\drbacklog.cmd`.
 
 ### Where the backlog file lives
 
