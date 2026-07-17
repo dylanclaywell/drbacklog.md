@@ -4,7 +4,22 @@
 // so it can be unit-tested directly. The MCP layer wires these to the store and
 // wraps them with input validation and themed result strings.
 
-import type { BacklogDocument, Task } from './model.js';
+import type { BacklogDocument, Task, TaskStatus } from './model.js';
+
+/** Thrown when an operation references a task id that is not in the backlog. */
+export class TaskNotFoundError extends Error {
+  constructor(public readonly id: number) {
+    super(`No task with id ${id}`);
+    this.name = 'TaskNotFoundError';
+  }
+}
+
+/** Find a task by id or throw TaskNotFoundError. */
+function findTaskOrThrow(doc: BacklogDocument, id: number): Task {
+  const task = doc.tasks.find((t) => t.id === id);
+  if (!task) throw new TaskNotFoundError(id);
+  return task;
+}
 
 /** The next task id: one past the highest existing id (1 for an empty backlog). */
 export function nextId(doc: BacklogDocument): number {
@@ -29,5 +44,22 @@ export function addTask(doc: BacklogDocument, input: AddTaskInput): Task {
     extraLines: [],
   };
   doc.tasks.push(task);
+  return task;
+}
+
+export interface MoveTaskInput {
+  id: number;
+  status: TaskStatus;
+  /** Optional resolution note; recorded only when moving to DONE or CLOSED. */
+  resolution?: string;
+}
+
+/** Move a task to a new ward, optionally recording a resolution. */
+export function moveTask(doc: BacklogDocument, input: MoveTaskInput): Task {
+  const task = findTaskOrThrow(doc, input.id);
+  task.status = input.status;
+  if ((input.status === 'DONE' || input.status === 'CLOSED') && input.resolution !== undefined) {
+    task.resolution = input.resolution;
+  }
   return task;
 }
