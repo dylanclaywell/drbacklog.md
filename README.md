@@ -201,6 +201,7 @@ The file is created with an empty skeleton on first run if it doesn't exist.
 | `get_task`            | Retrieve one task's full details by id.                    |
 | `get_backlog_summary` | Compact list of all tasks by status, without the details.  |
 | `export_backlog`      | Export all tasks to a CSV or JSON file for external tools. |
+| `find_tasks`          | Fuzzy-search tasks by title/description, ranked best-first. |
 | `add_epic`            | Add a new epic.                                            |
 | `update_epic`         | Edit an epic's title or description.                       |
 | `remove_epic`         | Permanently delete an epic (unlinks its tasks, not delete). |

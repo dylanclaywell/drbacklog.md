@@ -14,6 +14,7 @@ import {
   addTask,
   EpicNotFoundError,
   exportBacklog,
+  findTasks,
   getEpic,
   getEpicTasks,
   getTask,
@@ -101,6 +102,13 @@ function formatTaskDetail(task: Task): string {
   return lines.join('\n');
 }
 
+function formatTaskList(tasks: Task[], emptyMessage: string): string {
+  if (tasks.length === 0) return emptyMessage;
+  return tasks
+    .map((task) => `- [#${task.id}: ${task.title}](#task-${task.id}) — ${task.status}`)
+    .join('\n');
+}
+
 function formatEpicDetail(epic: Epic): string {
   return [`Epic #${epic.id}: ${epic.title}`, `* Description: ${epic.description}`].join('\n');
 }
@@ -111,10 +119,7 @@ function formatEpicList(epics: Epic[]): string {
 }
 
 function formatEpicTaskList(epicId: number, tasks: Task[]): string {
-  if (tasks.length === 0) return `No tasks linked to epic #${epicId}.`;
-  return tasks
-    .map((task) => `- [#${task.id}: ${task.title}](#task-${task.id}) — ${task.status}`)
-    .join('\n');
+  return formatTaskList(tasks, `No tasks linked to epic #${epicId}.`);
 }
 
 export function createServer(store: BacklogStore, options: CreateServerOptions): McpServer {
@@ -252,6 +257,30 @@ export function createServer(store: BacklogStore, options: CreateServerOptions):
         const outPath = join(options.exportDir, filename);
         await writeFile(outPath, content, 'utf8');
         return text(`Exported to ${format} format. Saved to ${outPath}.`);
+      }),
+  );
+
+  server.registerTool(
+    'find_tasks',
+    {
+      title: 'Fuzzy-search tasks',
+      description:
+        'Fuzzy-search tasks by title and description, ranked best-match-first. Use this instead ' +
+        'of get_backlog_summary when looking for tasks matching a topic or keyword — it searches ' +
+        'server-side instead of dumping the whole backlog to scan by eye.',
+      inputSchema: {
+        query: z.string().min(1),
+        status: z.enum(['TODO', 'DONE', 'CLOSED']).optional(),
+        epicId: idSchema.optional(),
+        limit: z.coerce.number().int().positive().max(50).optional(),
+        migrate: migrateSchema,
+      },
+    },
+    async ({ query, status, epicId, limit, migrate }) =>
+      guarded(async () => {
+        const doc = await store.load({ migrate });
+        const matches = findTasks(doc, { query, status, epicId, limit });
+        return text(formatTaskList(matches, `No matches for '${query}'.`));
       }),
   );
 

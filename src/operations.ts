@@ -4,6 +4,7 @@
 // so it can be unit-tested directly. The MCP layer wires these to the store and
 // wraps them with input validation and plain result strings.
 
+import { fuzzyScore } from './fuzzy.js';
 import type { BacklogDocument, Epic, Task, TaskStatus } from './model.js';
 
 /** Thrown when an operation references a task id that is not in the backlog. */
@@ -118,6 +119,38 @@ export function removeTask(doc: BacklogDocument, id: number): Task {
 /** Look up a task by id, or undefined if there is no such task. */
 export function getTask(doc: BacklogDocument, id: number): Task | undefined {
   return doc.tasks.find((t) => t.id === id);
+}
+
+export interface FindTasksInput {
+  query: string;
+  status?: TaskStatus;
+  epicId?: number;
+  /** Maximum results to return, ranked best-first. Default 10. */
+  limit?: number;
+}
+
+const TITLE_WEIGHT = 2;
+
+/**
+ * Fuzzy-search tasks by title and description, ranked best-match-first.
+ * Filters by status/epicId first (cheap, exact), then scores the remainder —
+ * a task with no match in either field is dropped, not just scored 0.
+ */
+export function findTasks(doc: BacklogDocument, input: FindTasksInput): Task[] {
+  const limit = input.limit ?? 10;
+  return doc.tasks
+    .filter((t) => input.status === undefined || t.status === input.status)
+    .filter((t) => input.epicId === undefined || t.epicId === input.epicId)
+    .map((task) => ({
+      task,
+      score:
+        fuzzyScore(input.query, task.title) * TITLE_WEIGHT +
+        fuzzyScore(input.query, task.description),
+    }))
+    .filter(({ score }) => score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(({ task }) => task);
 }
 
 export type ExportFormat = 'csv' | 'json';

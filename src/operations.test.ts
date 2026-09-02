@@ -5,6 +5,7 @@ import {
   addTask,
   EpicNotFoundError,
   exportBacklog,
+  findTasks,
   getEpic,
   getEpicTasks,
   getTask,
@@ -168,6 +169,62 @@ describe('getTask', () => {
 
   it('returns undefined for an unknown id', () => {
     expect(getTask(createEmptyDocument(), 999)).toBeUndefined();
+  });
+});
+
+describe('findTasks', () => {
+  it('ranks a title match above an unrelated task', () => {
+    const doc = createEmptyDocument();
+    addTask(doc, { title: 'Implement OAuth login', description: 'Google + GitHub.', created: 'x' });
+    addTask(doc, { title: 'Fix CSS bug', description: 'Button alignment.', created: 'x' });
+
+    const results = findTasks(doc, { query: 'oauth' });
+    expect(results.map((t) => t.id)).toEqual([1]);
+  });
+
+  it('matches on description when the title does not match', () => {
+    const doc = createEmptyDocument();
+    addTask(doc, {
+      title: 'Fix bug',
+      description: 'Related to OAuth token refresh.',
+      created: 'x',
+    });
+
+    expect(findTasks(doc, { query: 'oauth' }).map((t) => t.id)).toEqual([1]);
+  });
+
+  it('filters by status', () => {
+    const doc = createEmptyDocument();
+    addTask(doc, { title: 'Login page', description: '', created: 'x' });
+    const task2 = addTask(doc, { title: 'Login retry', description: '', created: 'x' });
+    task2.status = 'DONE';
+
+    expect(findTasks(doc, { query: 'login', status: 'DONE' }).map((t) => t.id)).toEqual([2]);
+  });
+
+  it('filters by epicId', () => {
+    const doc = createEmptyDocument();
+    const task1 = addTask(doc, { title: 'Login page', description: '', created: 'x' });
+    addTask(doc, { title: 'Login retry', description: '', created: 'x' });
+    const epic = addEpic(doc, { title: 'Auth', description: '' });
+    task1.epicId = epic.id;
+
+    expect(findTasks(doc, { query: 'login', epicId: epic.id }).map((t) => t.id)).toEqual([1]);
+  });
+
+  it('respects limit', () => {
+    const doc = createEmptyDocument();
+    for (let i = 0; i < 5; i++)
+      addTask(doc, { title: `Login task ${i}`, description: '', created: 'x' });
+
+    expect(findTasks(doc, { query: 'login', limit: 2 })).toHaveLength(2);
+  });
+
+  it('excludes tasks with no match in title or description', () => {
+    const doc = createEmptyDocument();
+    addTask(doc, { title: 'Fix CSS bug', description: 'Button alignment.', created: 'x' });
+
+    expect(findTasks(doc, { query: 'zzz' })).toEqual([]);
   });
 });
 

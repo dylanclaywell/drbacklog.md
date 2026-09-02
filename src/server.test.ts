@@ -42,7 +42,7 @@ describe('MCP server', () => {
     return (await client.callTool({ name, arguments: args })) as TextResult;
   }
 
-  it('exposes all fourteen tools', async () => {
+  it('exposes all fifteen tools', async () => {
     const names = (await client.listTools()).tools.map((t) => t.name).sort();
     expect(names).toEqual(
       [
@@ -53,6 +53,7 @@ describe('MCP server', () => {
         'move_task',
         'remove_task',
         'update_task',
+        'find_tasks',
         'add_epic',
         'update_epic',
         'remove_epic',
@@ -106,6 +107,33 @@ describe('MCP server', () => {
     const written = await readFile(join(dir, 'backlog.json'), 'utf8');
     const parsed = JSON.parse(written) as Array<{ id: number; title: string }>;
     expect(parsed).toEqual([expect.objectContaining({ id: 1, title: 'Login' })]);
+  });
+
+  describe('find_tasks', () => {
+    it('ranks a matching task and omits a non-matching one', async () => {
+      await call('add_task', { title: 'Implement OAuth login', description: 'Google + GitHub.' });
+      await call('add_task', { title: 'Fix CSS bug', description: 'Button alignment.' });
+
+      const result = resultText(await call('find_tasks', { query: 'oauth' }));
+      expect(result).toContain('[#1: Implement OAuth login](#task-1)');
+      expect(result).not.toContain('#2');
+    });
+
+    it('filters by status', async () => {
+      await call('add_task', { title: 'Login page', description: '' });
+      await call('add_task', { title: 'Login retry logic', description: '' });
+      await call('move_task', { id: 2, status: 'DONE' });
+
+      const result = resultText(await call('find_tasks', { query: 'login', status: 'DONE' }));
+      expect(result).toContain('#2');
+      expect(result).not.toContain('#1');
+    });
+
+    it('returns a message when nothing matches', async () => {
+      await call('add_task', { title: 'Login page', description: '' });
+      const result = resultText(await call('find_tasks', { query: 'zzz' }));
+      expect(result).toContain("No matches for 'zzz'");
+    });
   });
 
   describe('epics', () => {
