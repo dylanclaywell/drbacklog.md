@@ -14,7 +14,7 @@ import { createEmptyDocument } from './store.js';
 
 function docWithTask(): { doc: ReturnType<typeof createEmptyDocument>; id: number } {
   const doc = createEmptyDocument();
-  const task = addTask(doc, { title: 'A task', description: 'desc', admitted: '2026-07-17' });
+  const task = addTask(doc, { title: 'A task', description: 'desc', created: '2026-07-17' });
   return { doc, id: task.id };
 }
 
@@ -26,8 +26,8 @@ describe('nextId', () => {
   it('returns one past the highest existing id, ignoring gaps', () => {
     const doc = createEmptyDocument();
     doc.tasks.push(
-      { id: 1, title: 'a', description: '', status: 'TODO', admitted: '', extraLines: [] },
-      { id: 5, title: 'b', description: '', status: 'DONE', admitted: '', extraLines: [] },
+      { id: 1, title: 'a', description: '', status: 'TODO', created: '', extraLines: [] },
+      { id: 5, title: 'b', description: '', status: 'DONE', created: '', extraLines: [] },
     );
     expect(nextId(doc)).toBe(6);
   });
@@ -39,7 +39,7 @@ describe('addTask', () => {
     const task = addTask(doc, {
       title: 'Implement login',
       description: 'OAuth2 flow.',
-      admitted: '2026-07-17',
+      created: '2026-07-17',
     });
 
     expect(task).toEqual({
@@ -47,7 +47,7 @@ describe('addTask', () => {
       title: 'Implement login',
       description: 'OAuth2 flow.',
       status: 'TODO',
-      admitted: '2026-07-17',
+      created: '2026-07-17',
       extraLines: [],
     });
     expect(doc.tasks).toHaveLength(1);
@@ -56,8 +56,8 @@ describe('addTask', () => {
 
   it('assigns incrementing ids across successive adds', () => {
     const doc = createEmptyDocument();
-    const first = addTask(doc, { title: 'a', description: '', admitted: '2026-07-17' });
-    const second = addTask(doc, { title: 'b', description: '', admitted: '2026-07-17' });
+    const first = addTask(doc, { title: 'a', description: '', created: '2026-07-17' });
+    const second = addTask(doc, { title: 'b', description: '', created: '2026-07-17' });
     expect([first.id, second.id]).toEqual([1, 2]);
   });
 });
@@ -129,8 +129,8 @@ describe('updateTask', () => {
 describe('removeTask', () => {
   it('removes the task and returns it, leaving others intact', () => {
     const doc = createEmptyDocument();
-    const a = addTask(doc, { title: 'a', description: '', admitted: '2026-07-17' });
-    const b = addTask(doc, { title: 'b', description: '', admitted: '2026-07-17' });
+    const a = addTask(doc, { title: 'a', description: '', created: '2026-07-17' });
+    const b = addTask(doc, { title: 'b', description: '', created: '2026-07-17' });
     const removed = removeTask(doc, a.id);
     expect(removed).toBe(a);
     expect(doc.tasks.map((t) => t.id)).toEqual([b.id]);
@@ -143,8 +143,8 @@ describe('removeTask', () => {
 
   it('frees the highest id for reuse by nextId', () => {
     const doc = createEmptyDocument();
-    addTask(doc, { title: 'a', description: '', admitted: '2026-07-17' });
-    const b = addTask(doc, { title: 'b', description: '', admitted: '2026-07-17' });
+    addTask(doc, { title: 'a', description: '', created: '2026-07-17' });
+    const b = addTask(doc, { title: 'b', description: '', created: '2026-07-17' });
     expect(b.id).toBe(2);
     removeTask(doc, b.id);
     expect(nextId(doc)).toBe(2);
@@ -165,7 +165,7 @@ describe('getTask', () => {
 describe('exportBacklog', () => {
   it('serializes tasks to JSON with a backlog.json filename', () => {
     const doc = createEmptyDocument();
-    addTask(doc, { title: 'Login', description: 'OAuth2.', admitted: '2026-07-17' });
+    addTask(doc, { title: 'Login', description: 'OAuth2.', created: '2026-07-17' });
     const { filename, content } = exportBacklog(doc, 'json');
     expect(filename).toBe('backlog.json');
     const parsed = JSON.parse(content) as Array<Record<string, unknown>>;
@@ -175,18 +175,18 @@ describe('exportBacklog', () => {
       title: 'Login',
       description: 'OAuth2.',
       status: 'TODO',
-      admitted: '2026-07-17',
+      created: '2026-07-17',
       resolution: '',
     });
   });
 
   it('serializes tasks to CSV with a header and one row per task', () => {
     const doc = createEmptyDocument();
-    addTask(doc, { title: 'Login', description: 'OAuth2.', admitted: '2026-07-17' });
+    addTask(doc, { title: 'Login', description: 'OAuth2.', created: '2026-07-17' });
     const { filename, content } = exportBacklog(doc, 'csv');
     expect(filename).toBe('backlog.csv');
     const lines = content.trimEnd().split('\n');
-    expect(lines[0]).toBe('id,title,description,status,admitted,resolution');
+    expect(lines[0]).toBe('id,title,description,status,created,resolution');
     expect(lines).toHaveLength(2);
     expect(lines[1]).toBe('1,Login,OAuth2.,TODO,2026-07-17,');
   });
@@ -196,7 +196,7 @@ describe('exportBacklog', () => {
     addTask(doc, {
       title: 'has, comma "and" quote',
       description: 'line one\nline two',
-      admitted: '2026-07-17',
+      created: '2026-07-17',
     });
     const { content } = exportBacklog(doc, 'csv');
     expect(content).toContain('"has, comma ""and"" quote"');

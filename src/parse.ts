@@ -1,18 +1,22 @@
 // Parser: backlog.md text -> BacklogDocument.
 //
-// The ledger (bottom zone) is authoritative for all task data. The top index
+// The details zone (bottom) is authoritative for all task data. The top index
 // is a derived projection that the renderer rebuilds, so this parser reads the
 // index only to skip past it and never trusts it for task content. Anything the
 // parser cannot map to known structure is captured verbatim (document-level in
 // Passthrough, per-task in Task.extraLines) so a parse -> render round trip
 // preserves human edits.
+//
+// `parse` reads only the current canonical headings/field names. `parseLegacy`
+// is the same state machine driven by a dialect that also recognizes the
+// pre-rename headings and the old `Admitted` field name, so a legacy file can
+// be read once for migration (see migrate.ts) without teaching the canonical
+// parser about a format it should never write.
 
-import { DEFAULT_TITLE, LEDGER_HEADING, WARDS } from './model.js';
+import { DEFAULT_TITLE, DETAILS_HEADING, SECTIONS } from './model.js';
 import type { BacklogDocument, Passthrough, Task, TaskStatus } from './model.js';
 
-type FieldKey = 'status' | 'admitted' | 'description' | 'resolution';
-
-const WARD_HEADINGS: ReadonlySet<string> = new Set(WARDS.map((w) => w.heading));
+type FieldKey = 'status' | 'created' | 'description' | 'resolution';
 
 const H1_RE = /^#\s+(.*\S)\s*$/;
 const H2_RE = /^##\s+(.*\S)\s*$/;
@@ -25,10 +29,28 @@ const FIELD_RE = /^\*\s+\*\*([^:*]+):\*\*\s?(.*)$/;
 
 const KNOWN_FIELDS: ReadonlySet<string> = new Set<FieldKey>([
   'status',
-  'admitted',
+  'created',
   'description',
   'resolution',
 ]);
+
+/**
+ * The vocabulary a parse pass recognizes. The canonical dialect matches only
+ * what the renderer emits today; the legacy dialect additionally matches the
+ * pre-rename headings and field name so an old file can be read once.
+ */
+interface Dialect {
+  sectionHeadings: ReadonlySet<string>;
+  detailsHeadings: ReadonlySet<string>;
+  /** Maps a lowercased legacy field key to the canonical `FieldKey` it means. */
+  fieldAliases: Readonly<Partial<Record<string, FieldKey>>>;
+}
+
+const CURRENT_DIALECT: Dialect = {
+  sectionHeadings: new Set(SECTIONS.map((s) => s.heading)),
+  detailsHeadings: new Set([DETAILS_HEADING]),
+  fieldAliases: {},
+};
 
 const isBlank = (line: string): boolean => line.trim() === '';
 const isDivider = (line: string): boolean => DIVIDER_RE.test(line);
@@ -45,12 +67,15 @@ function h2Text(line: string): string | null {
   return m ? (m[1] ?? '') : null;
 }
 
-const isWardHeading = (line: string): boolean => {
+function isSectionHeading(line: string, dialect: Dialect): boolean {
   const text = h2Text(line);
-  return text !== null && WARD_HEADINGS.has(text);
-};
+  return text !== null && dialect.sectionHeadings.has(text);
+}
 
-const isLedgerHeading = (line: string): boolean => h2Text(line) === LEDGER_HEADING;
+function isDetailsHeading(line: string, dialect: Dialect): boolean {
+  const text = h2Text(line);
+  return text !== null && dialect.detailsHeadings.has(text);
+}
 
 function matchTaskHeading(line: string): { id: number; title: string } | null {
   const m = TASK_HEADING_RE.exec(line);
@@ -59,11 +84,13 @@ function matchTaskHeading(line: string): { id: number; title: string } | null {
   return { id: Number(idStr), title };
 }
 
-function matchField(line: string): { key: string; value: string } | null {
+function matchField(line: string, dialect: Dialect): { key: FieldKey; value: string } | null {
   const m = FIELD_RE.exec(line);
   if (!m) return null;
-  const [, key = '', value = ''] = m;
-  return { key: key.trim().toLowerCase(), value };
+  const [, rawKey = '', value = ''] = m;
+  const key = rawKey.trim().toLowerCase();
+  const resolved = dialect.fieldAliases[key] ?? key;
+  return KNOWN_FIELDS.has(resolved) ? { key: resolved as FieldKey, value } : null;
 }
 
 function parseStatus(value: string): TaskStatus {
@@ -78,8 +105,8 @@ function applyField(task: Task, key: FieldKey, value: string): void {
     case 'status':
       task.status = parseStatus(value);
       break;
-    case 'admitted':
-      task.admitted = value.trim();
+    case 'created':
+      task.created = value.trim();
       break;
     case 'description':
       task.description = value;
@@ -103,12 +130,12 @@ function trimBlankEdges(lines: string[]): string[] {
 //
 //   preTitle    lines before the `# ` title (usually none)
 //   preamble    notes between the title and the first section
-//   index       the ward lists (derived; discarded and rebuilt on render)
-//   midNotes    notes after the index / divider, before the ledger
-//   ledger      the task detail blocks (the authoritative task data)
-type State = 'preTitle' | 'preamble' | 'index' | 'midNotes' | 'ledger';
+//   index       the status section lists (derived; discarded and rebuilt on render)
+//   midNotes    notes after the index / divider, before the details zone
+//   details     the task detail blocks (the authoritative task data)
+type State = 'preTitle' | 'preamble' | 'index' | 'midNotes' | 'details';
 
-export function parse(content: string): BacklogDocument {
+function parseWithDialect(content: string, dialect: Dialect): BacklogDocument {
   const lines = content.split(/\r?\n/);
 
   let title = DEFAULT_TITLE;
@@ -117,7 +144,7 @@ export function parse(content: string): BacklogDocument {
   const tasks: Task[] = [];
 
   let state: State = 'preTitle';
-  // The task currently being filled in the ledger zone, and which multi-line
+  // The task currently being filled in the details zone, and which multi-line
   // field (if any) trailing prose should append to.
   let cur: Task | null = null;
   let curField: 'description' | 'resolution' | null = null;
@@ -136,8 +163,8 @@ export function parse(content: string): BacklogDocument {
       }
 
       case 'preamble': {
-        if (isLedgerHeading(line)) state = 'ledger';
-        else if (isWardHeading(line)) state = 'index';
+        if (isDetailsHeading(line, dialect)) state = 'details';
+        else if (isSectionHeading(line, dialect)) state = 'index';
         else if (isDivider(line)) state = 'midNotes';
         else preamble.push(line);
         break;
@@ -146,22 +173,22 @@ export function parse(content: string): BacklogDocument {
       case 'index': {
         // The index is derived and rebuilt on render, so drop its headings and
         // list items; keep only stray human prose.
-        if (isLedgerHeading(line)) state = 'ledger';
+        if (isDetailsHeading(line, dialect)) state = 'details';
         else if (isDivider(line)) state = 'midNotes';
-        else if (isWardHeading(line) || isIndexItem(line) || isBlank(line)) break;
+        else if (isSectionHeading(line, dialect) || isIndexItem(line) || isBlank(line)) break;
         else midNotes.push(line);
         break;
       }
 
       case 'midNotes': {
-        if (isLedgerHeading(line)) state = 'ledger';
-        else if (isWardHeading(line)) state = 'index';
+        if (isDetailsHeading(line, dialect)) state = 'details';
+        else if (isSectionHeading(line, dialect)) state = 'index';
         else if (isDivider(line) || isBlank(line)) break;
         else midNotes.push(line);
         break;
       }
 
-      case 'ledger': {
+      case 'details': {
         if (isAnchor(line)) {
           // Anchors are regenerated from the task id on render.
           curField = null;
@@ -175,7 +202,7 @@ export function parse(content: string): BacklogDocument {
             title: head.title,
             description: '',
             status: 'TODO',
-            admitted: '',
+            created: '',
             extraLines: [],
           };
           tasks.push(cur);
@@ -189,22 +216,23 @@ export function parse(content: string): BacklogDocument {
           break;
         }
 
-        const field = matchField(line);
+        const field = matchField(line, dialect);
         if (field) {
-          if (KNOWN_FIELDS.has(field.key)) {
-            applyField(cur, field.key as FieldKey, field.value);
-            curField =
-              field.key === 'description'
-                ? 'description'
-                : field.key === 'resolution'
-                  ? 'resolution'
-                  : null;
-          } else {
-            // Unknown `* **Key:** value` bullet: preserve verbatim, and stop
-            // treating following prose as part of the prior field.
-            cur.extraLines.push(line);
-            curField = null;
-          }
+          applyField(cur, field.key, field.value);
+          curField =
+            field.key === 'description'
+              ? 'description'
+              : field.key === 'resolution'
+                ? 'resolution'
+                : null;
+          break;
+        }
+
+        // Not a recognized field. An unrecognized `* **Key:** value` bullet is
+        // preserved verbatim, same as any other stray line.
+        if (FIELD_RE.test(line)) {
+          cur.extraLines.push(line);
+          curField = null;
           break;
         }
 
@@ -236,4 +264,31 @@ export function parse(content: string): BacklogDocument {
   };
 
   return { title, tasks, passthrough };
+}
+
+/** Parse canonical-format backlog.md text (what the renderer emits today). */
+export function parse(content: string): BacklogDocument {
+  return parseWithDialect(content, CURRENT_DIALECT);
+}
+
+// Pre-rename (hospital-themed) headings and field name, recognized only by
+// parseLegacy for one-time migration (see migrate.ts). Also accepts the
+// current headings, so a partially hand-edited file still parses.
+const LEGACY_DIALECT: Dialect = {
+  sectionHeadings: new Set([
+    ...CURRENT_DIALECT.sectionHeadings,
+    '🚨 CRITICAL (TODO)',
+    '🩺 STABLE (DONE)',
+    '🗂️ ARCHIVED (CLOSED)',
+  ]),
+  detailsHeadings: new Set([
+    ...CURRENT_DIALECT.detailsHeadings,
+    '🔬 Patient Ledger (Task Details)',
+  ]),
+  fieldAliases: { admitted: 'created' },
+};
+
+/** Parse a pre-rename backlog.md (old headings, `Admitted` field) for migration. */
+export function parseLegacy(content: string): BacklogDocument {
+  return parseWithDialect(content, LEGACY_DIALECT);
 }

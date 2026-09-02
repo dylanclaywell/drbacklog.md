@@ -1,10 +1,37 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import { BacklogStore, createEmptyDocument, resolveBacklogPath } from './store.js';
+import {
+  BacklogStore,
+  LegacyFormatError,
+  createEmptyDocument,
+  resolveBacklogPath,
+} from './store.js';
 import type { Task } from './model.js';
+
+const LEGACY_FILE = [
+  '# 🏥 DrBacklog Patient Chart',
+  '',
+  '## 🚨 CRITICAL (TODO)',
+  '- [ ] [#1: Legacy task](#task-1)',
+  '',
+  '## 🩺 STABLE (DONE)',
+  '',
+  '## 🗂️ ARCHIVED (CLOSED)',
+  '',
+  '---',
+  '',
+  '## 🔬 Patient Ledger (Task Details)',
+  '',
+  '<a id="task-1"></a>',
+  '### #1: Legacy task',
+  '* **Status:** TODO',
+  '* **Admitted:** 2026-07-16',
+  '* **Description:** Predates the rename.',
+  '',
+].join('\n');
 
 function makeTask(id: number): Task {
   return {
@@ -12,7 +39,7 @@ function makeTask(id: number): Task {
     title: `Task ${id}`,
     description: 'A description.',
     status: 'TODO',
-    admitted: '2026-07-17',
+    created: '2026-07-17',
     extraLines: [],
   };
 }
@@ -82,6 +109,47 @@ describe('BacklogStore', () => {
     });
     const leftovers = (await readdir(dir)).filter((name) => name.endsWith('.tmp'));
     expect(leftovers).toEqual([]);
+  });
+
+  describe('legacy-format gate', () => {
+    beforeEach(async () => {
+      await writeFile(file, LEGACY_FILE, 'utf8');
+    });
+
+    it('load throws LegacyFormatError without migrate:true', async () => {
+      await expect(store.load()).rejects.toThrow(LegacyFormatError);
+    });
+
+    it('mutate throws LegacyFormatError without migrate:true, and the file is untouched', async () => {
+      await expect(store.mutate((doc) => doc.tasks.push(makeTask(2)))).rejects.toThrow(
+        LegacyFormatError,
+      );
+      expect(await readFile(file, 'utf8')).toBe(LEGACY_FILE);
+    });
+
+    it('load({ migrate: true }) rewrites the file and returns the migrated document', async () => {
+      const doc = await store.load({ migrate: true });
+      expect(doc.tasks).toEqual([
+        {
+          id: 1,
+          title: 'Legacy task',
+          description: 'Predates the rename.',
+          status: 'TODO',
+          created: '2026-07-16',
+          extraLines: [],
+        },
+      ]);
+
+      const onDisk = await readFile(file, 'utf8');
+      expect(onDisk).toContain('## TODO');
+      expect(onDisk).not.toContain('CRITICAL');
+    });
+
+    it('mutate({ migrate: true }) migrates first, then applies the mutation', async () => {
+      await store.mutate((doc) => doc.tasks.push(makeTask(2)), { migrate: true });
+      const doc = await store.load();
+      expect(doc.tasks.map((t) => t.id)).toEqual([1, 2]);
+    });
   });
 });
 

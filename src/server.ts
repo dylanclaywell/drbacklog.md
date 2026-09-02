@@ -1,8 +1,8 @@
 // MCP server wiring: registers the DrBacklog tools against a BacklogStore.
 //
-// Tool names are plain and conventional; the themed medical persona lives only
-// in the human-readable result strings. Mutations go through store.mutate so
-// they are serialized and persisted atomically; reads use store.load.
+// Tool names and result strings are plain and conventional. Mutations go
+// through store.mutate so they are serialized and persisted atomically; reads
+// use store.load.
 
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -19,10 +19,21 @@ import {
   updateTask,
 } from './operations.js';
 import { renderSummary } from './render.js';
-import type { BacklogStore } from './store.js';
+import { LegacyFormatError, type BacklogStore, type LoadOptions } from './store.js';
 import type { Task } from './model.js';
 
 const idSchema = z.coerce.number().int().positive();
+
+// Every tool takes this: the file is only migrated from the pre-rename format
+// when a caller passes migrate: true, so an old file is never rewritten
+// without an explicit, per-call opt-in (see LegacyFormatError below).
+const migrateSchema = z
+  .boolean()
+  .optional()
+  .describe(
+    'Set true to migrate backlog.md from the old pre-rename format before running this tool. ' +
+      'Only set this after the user has confirmed migrating is OK.',
+  );
 
 interface CreateServerOptions {
   /** Directory to write export files into (trusted; filenames are fixed). */
@@ -38,7 +49,26 @@ function errorText(body: string) {
 }
 
 function notFound(id: number) {
-  return errorText(`🚑 No patient #${id} found in the records.`);
+  return errorText(`No task #${id} found.`);
+}
+
+function legacyFormat() {
+  return errorText(
+    'backlog.md is in the old pre-rename format (CRITICAL/STABLE/ARCHIVED headings, ' +
+      '"Admitted" field) and needs a one-time migration before this can run. Migration only ' +
+      'renames headings and the Admitted field to Created — no tasks are changed. Confirm ' +
+      'with the user that migrating now is OK, then retry this exact call with migrate: true.',
+  );
+}
+
+/** Run a tool body, translating known store/operation errors to a text result. */
+async function guarded(fn: () => Promise<ReturnType<typeof text>>) {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof LegacyFormatError) return legacyFormat();
+    throw err;
+  }
 }
 
 /** Today's date as YYYY-MM-DD from the server clock. */
@@ -48,9 +78,9 @@ function today(): string {
 
 function formatTaskDetail(task: Task): string {
   const lines = [
-    `🗒️ Patient #${task.id} chart:`,
+    `Task #${task.id}:`,
     `* Status: ${task.status}`,
-    `* Admitted: ${task.admitted}`,
+    `* Created: ${task.created}`,
     `* Title: ${task.title}`,
     `* Description: ${task.description}`,
   ];
@@ -69,14 +99,18 @@ export function createServer(store: BacklogStore, options: CreateServerOptions):
       inputSchema: {
         title: z.string().min(1),
         description: z.string(),
+        migrate: migrateSchema,
       },
     },
-    async ({ title, description }) => {
-      const task = await store.mutate((doc) =>
-        addTask(doc, { title, description, admitted: today() }),
-      );
-      return text(`🔬 Diagnosis: New task #${task.id} admitted to the TODO ward.`);
-    },
+    async ({ title, description, migrate }) =>
+      guarded(async () => {
+        const loadOptions: LoadOptions = { migrate };
+        const task = await store.mutate(
+          (doc) => addTask(doc, { title, description, created: today() }),
+          loadOptions,
+        );
+        return text(`Created task #${task.id}.`);
+      }),
   );
 
   server.registerTool(
@@ -89,17 +123,19 @@ export function createServer(store: BacklogStore, options: CreateServerOptions):
         id: idSchema,
         status: z.enum(['TODO', 'DONE', 'CLOSED']),
         resolution: z.string().optional(),
+        migrate: migrateSchema,
       },
     },
-    async ({ id, status, resolution }) => {
-      try {
-        await store.mutate((doc) => moveTask(doc, { id, status, resolution }));
-        return text(`🩻 Operation: Patient #${id} successfully transferred to ${status}.`);
-      } catch (err) {
-        if (err instanceof TaskNotFoundError) return notFound(id);
-        throw err;
-      }
-    },
+    async ({ id, status, resolution, migrate }) =>
+      guarded(async () => {
+        try {
+          await store.mutate((doc) => moveTask(doc, { id, status, resolution }), { migrate });
+          return text(`Task #${id} moved to ${status}.`);
+        } catch (err) {
+          if (err instanceof TaskNotFoundError) return notFound(id);
+          throw err;
+        }
+      }),
   );
 
   server.registerTool(
@@ -111,17 +147,19 @@ export function createServer(store: BacklogStore, options: CreateServerOptions):
         id: idSchema,
         field: z.enum(['title', 'description', 'resolution']),
         value: z.string(),
+        migrate: migrateSchema,
       },
     },
-    async ({ id, field, value }) => {
-      try {
-        await store.mutate((doc) => updateTask(doc, { id, field, value }));
-        return text(`🩹 Chart Updated: Patient #${id}'s ${field} has been updated.`);
-      } catch (err) {
-        if (err instanceof TaskNotFoundError) return notFound(id);
-        throw err;
-      }
-    },
+    async ({ id, field, value, migrate }) =>
+      guarded(async () => {
+        try {
+          await store.mutate((doc) => updateTask(doc, { id, field, value }), { migrate });
+          return text(`Task #${id}'s ${field} updated.`);
+        } catch (err) {
+          if (err instanceof TaskNotFoundError) return notFound(id);
+          throw err;
+        }
+      }),
   );
 
   server.registerTool(
@@ -129,17 +167,18 @@ export function createServer(store: BacklogStore, options: CreateServerOptions):
     {
       title: 'Delete a task',
       description: 'Permanently remove a task from the backlog.',
-      inputSchema: { id: idSchema },
+      inputSchema: { id: idSchema, migrate: migrateSchema },
     },
-    async ({ id }) => {
-      try {
-        await store.mutate((doc) => removeTask(doc, id));
-        return text(`🗑️ Records purged: Patient #${id} has been removed from the backlog.`);
-      } catch (err) {
-        if (err instanceof TaskNotFoundError) return notFound(id);
-        throw err;
-      }
-    },
+    async ({ id, migrate }) =>
+      guarded(async () => {
+        try {
+          await store.mutate((doc) => removeTask(doc, id), { migrate });
+          return text(`Task #${id} removed.`);
+        } catch (err) {
+          if (err instanceof TaskNotFoundError) return notFound(id);
+          throw err;
+        }
+      }),
   );
 
   server.registerTool(
@@ -147,12 +186,13 @@ export function createServer(store: BacklogStore, options: CreateServerOptions):
     {
       title: 'Get a task',
       description: "Retrieve a single task's full details by id.",
-      inputSchema: { id: idSchema },
+      inputSchema: { id: idSchema, migrate: migrateSchema },
     },
-    async ({ id }) => {
-      const task = getTask(await store.load(), id);
-      return task ? text(formatTaskDetail(task)) : notFound(id);
-    },
+    async ({ id, migrate }) =>
+      guarded(async () => {
+        const task = getTask(await store.load({ migrate }), id);
+        return task ? text(formatTaskDetail(task)) : notFound(id);
+      }),
   );
 
   server.registerTool(
@@ -161,11 +201,13 @@ export function createServer(store: BacklogStore, options: CreateServerOptions):
       title: 'Summarize the backlog',
       description:
         'Return a compact list of all tasks grouped by status (TODO, DONE, CLOSED), without full details. Token-efficient.',
+      inputSchema: { migrate: migrateSchema },
     },
-    async () => {
-      const summary = renderSummary(await store.load());
-      return text(`📋 Generating Backlog Health Chart...\n\n${summary}`);
-    },
+    async ({ migrate }) =>
+      guarded(async () => {
+        const summary = renderSummary(await store.load({ migrate }));
+        return text(summary);
+      }),
   );
 
   server.registerTool(
@@ -173,16 +215,15 @@ export function createServer(store: BacklogStore, options: CreateServerOptions):
     {
       title: 'Export the backlog',
       description: 'Export all tasks to a CSV or JSON file for external tools.',
-      inputSchema: { format: z.enum(['csv', 'json']) },
+      inputSchema: { format: z.enum(['csv', 'json']), migrate: migrateSchema },
     },
-    async ({ format }) => {
-      const { filename, content } = exportBacklog(await store.load(), format);
-      const outPath = join(options.exportDir, filename);
-      await writeFile(outPath, content, 'utf8');
-      return text(
-        `📁 Medical records exported successfully to ${format} format. Saved to ${outPath}.`,
-      );
-    },
+    async ({ format, migrate }) =>
+      guarded(async () => {
+        const { filename, content } = exportBacklog(await store.load({ migrate }), format);
+        const outPath = join(options.exportDir, filename);
+        await writeFile(outPath, content, 'utf8');
+        return text(`Exported to ${format} format. Saved to ${outPath}.`);
+      }),
   );
 
   return server;

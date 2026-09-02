@@ -2,10 +2,11 @@
 //
 // Emits the canonical file layout the parser expects, so a render -> parse
 // round trip is lossless and render is idempotent. The top index is rebuilt
-// from the ledger every time (all three wards always appear, even when empty),
-// and each task gets a stable `<a id="task-N">` anchor derived from its id.
+// from the task details every time (all three status sections always appear,
+// even when empty), and each task gets a stable `<a id="task-N">` anchor
+// derived from its id.
 
-import { anchorFor, LEDGER_HEADING, WARDS } from './model.js';
+import { anchorFor, DETAILS_HEADING, SECTIONS } from './model.js';
 import type { BacklogDocument, Task } from './model.js';
 
 /**
@@ -18,8 +19,8 @@ function pushField(lines: string[], label: string, value: string): void {
   lines.push(...rest);
 }
 
-/** The index list for one ward: its heading plus a checkbox line per task. */
-function renderWard(
+/** The index list for one status section: its heading plus a checkbox line per task. */
+function renderSection(
   status: Task['status'],
   heading: string,
   checkbox: string,
@@ -33,11 +34,11 @@ function renderWard(
   return lines;
 }
 
-/** One ledger detail block: anchor, heading, fields, then preserved extras. */
+/** One task details block: anchor, heading, fields, then preserved extras. */
 function renderTask(task: Task): string[] {
   const lines = [`<a id="${anchorFor(task.id)}"></a>`, `### #${task.id}: ${task.title}`];
   lines.push(`* **Status:** ${task.status}`);
-  lines.push(`* **Admitted:** ${task.admitted}`);
+  lines.push(`* **Created:** ${task.created}`);
   pushField(lines, 'Description', task.description);
   if (task.resolution !== undefined) pushField(lines, 'Resolution', task.resolution);
   lines.push(...task.extraLines);
@@ -49,9 +50,11 @@ function joinBlocks(blocks: string[][]): string {
   return blocks.map((block) => block.join('\n')).join('\n\n') + '\n';
 }
 
-/** The three ward index lists, in order. */
-function wardBlocks(doc: BacklogDocument): string[][] {
-  return WARDS.map((ward) => renderWard(ward.status, ward.heading, ward.checkbox, doc.tasks));
+/** The three status section index lists, in order. */
+function sectionBlocks(doc: BacklogDocument): string[][] {
+  return SECTIONS.map((section) =>
+    renderSection(section.status, section.heading, section.checkbox, doc.tasks),
+  );
 }
 
 export function render(doc: BacklogDocument): string {
@@ -60,13 +63,13 @@ export function render(doc: BacklogDocument): string {
 
   if (doc.passthrough.preamble.length > 0) blocks.push([...doc.passthrough.preamble]);
 
-  blocks.push(...wardBlocks(doc));
+  blocks.push(...sectionBlocks(doc));
 
   blocks.push(['---']);
 
   if (doc.passthrough.midNotes.length > 0) blocks.push([...doc.passthrough.midNotes]);
 
-  blocks.push([`## ${LEDGER_HEADING}`]);
+  blocks.push([`## ${DETAILS_HEADING}`]);
 
   for (const task of doc.tasks) blocks.push(renderTask(task));
 
@@ -74,10 +77,10 @@ export function render(doc: BacklogDocument): string {
 }
 
 /**
- * Render only the index (title + three ward lists), omitting the ledger. This
- * is the token-efficient backlog summary — the same top-of-file view the parser
- * treats as derived.
+ * Render only the index (title + three status section lists), omitting the
+ * task details. This is the token-efficient backlog summary — the same
+ * top-of-file view the parser treats as derived.
  */
 export function renderSummary(doc: BacklogDocument): string {
-  return joinBlocks([[`# ${doc.title}`], ...wardBlocks(doc)]);
+  return joinBlocks([[`# ${doc.title}`], ...sectionBlocks(doc)]);
 }

@@ -29,18 +29,18 @@ export function nextId(doc: BacklogDocument): number {
 export interface AddTaskInput {
   title: string;
   description: string;
-  /** Admission date, `YYYY-MM-DD`, supplied by the caller's clock. */
-  admitted: string;
+  /** Creation date, `YYYY-MM-DD`, supplied by the caller's clock. */
+  created: string;
 }
 
-/** Add a new task to the TODO ward and return it. */
+/** Add a new task to the TODO section and return it. */
 export function addTask(doc: BacklogDocument, input: AddTaskInput): Task {
   const task: Task = {
     id: nextId(doc),
     title: input.title,
     description: input.description,
     status: 'TODO',
-    admitted: input.admitted,
+    created: input.created,
     extraLines: [],
   };
   doc.tasks.push(task);
@@ -54,7 +54,7 @@ export interface MoveTaskInput {
   resolution?: string;
 }
 
-/** Move a task to a new ward, optionally recording a resolution. */
+/** Move a task to a new status, optionally recording a resolution. */
 export function moveTask(doc: BacklogDocument, input: MoveTaskInput): Task {
   const task = findTaskOrThrow(doc, input.id);
   task.status = input.status;
@@ -117,7 +117,7 @@ interface ExportRow {
   title: string;
   description: string;
   status: TaskStatus;
-  admitted: string;
+  created: string;
   resolution: string;
 }
 
@@ -126,7 +126,7 @@ const CSV_COLUMNS: readonly (keyof ExportRow)[] = [
   'title',
   'description',
   'status',
-  'admitted',
+  'created',
   'resolution',
 ];
 
@@ -137,7 +137,7 @@ function toRow(task: Task): ExportRow {
     title: task.title,
     description: task.description,
     status: task.status,
-    admitted: task.admitted,
+    created: task.created,
     resolution: task.resolution ?? '',
   };
 }

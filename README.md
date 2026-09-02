@@ -1,27 +1,20 @@
-# 🏥 DrBacklog.md
+# DrBacklog.md
 
 An [MCP](https://modelcontextprotocol.io) server that manages a software
 development backlog stored entirely in a single flat Markdown file
-(`backlog.md`). Optimized for token efficiency and clean human/AI collaboration,
-with a lightly playful medical persona in its feedback.
+(`backlog.md`). Optimized for token efficiency and clean human/AI collaboration.
 
 ## How it works
 
 The backlog file has two zones:
 
-- **The index (top)** — compact checkbox lists of task titles per ward, each
-  linking to its detail block. This zone is _derived_: the server rebuilds it
-  from the ledger on every write, so it never drifts.
-- **The ledger (bottom)** — the authoritative record of every task, with full
-  descriptions and resolutions.
+- **The index (top)** — compact checkbox lists of task titles per status
+  section, each linking to its detail block. This zone is _derived_: the
+  server rebuilds it from the task details on every write, so it never drifts.
+- **Task Details (bottom)** — the authoritative record of every task, with
+  full descriptions and resolutions.
 
-Tasks live in three wards, keyed by status:
-
-| Status   | Ward        |
-| -------- | ----------- |
-| `TODO`   | 🚨 CRITICAL |
-| `DONE`   | 🩺 STABLE   |
-| `CLOSED` | 🗂️ ARCHIVED |
+Tasks live in three sections, keyed by status: `TODO`, `DONE`, `CLOSED`.
 
 Each task has a stable, id-based anchor (`<a id="task-101"></a>`), so editing a
 title never breaks the index links.
@@ -29,33 +22,44 @@ title never breaks the index links.
 ### Example `backlog.md`
 
 ```markdown
-# 🏥 DrBacklog Patient Chart
+# DrBacklog
 
-## 🚨 CRITICAL (TODO)
+## TODO
 
 - [ ] [#101: Implement OAuth2 login](#task-101)
 
-## 🩺 STABLE (DONE)
+## DONE
 
 - [x] [#102: Fix database migration timeout](#task-102)
 
-## 🗂️ ARCHIVED (CLOSED)
+## CLOSED
 
 ---
 
-## 🔬 Patient Ledger (Task Details)
+## Task Details
 
 <a id="task-101"></a>
 
 ### #101: Implement OAuth2 login
 
 - **Status:** TODO
-- **Admitted:** 2026-07-16
+- **Created:** 2026-07-16
 - **Description:** Integrate Google and GitHub authentication.
 ```
 
 Content the parser doesn't recognize (freeform notes, unknown fields) is
 preserved verbatim on a round trip, so hand-edits survive.
+
+### Migrating an old (pre-rename) `backlog.md`
+
+Versions before 0.3.0 used a hospital-themed format (`🚨 CRITICAL (TODO)`,
+`🩺 STABLE (DONE)`, `🗂️ ARCHIVED (CLOSED)`, `🔬 Patient Ledger`, and an
+`Admitted` field). Every tool detects an old-format file and refuses to run,
+returning a message asking the AI to confirm with you and retry the same call
+with `migrate: true`. That migrates the file in place — renaming headings and
+`Admitted` → `Created`, changing no task data — then runs the originally
+requested action. No separate migration step or tool call is needed; just
+approve it when asked.
 
 ## Install
 
@@ -162,9 +166,6 @@ The file is created with an empty skeleton on first run if it doesn't exist.
 | `get_task`            | Retrieve one task's full details by id.                    |
 | `get_backlog_summary` | Compact list of all tasks by status, without the details.  |
 | `export_backlog`      | Export all tasks to a CSV or JSON file for external tools. |
-
-Tool names and descriptions are plain; the medical persona appears only in the
-human-readable result messages.
 
 ## Development
 

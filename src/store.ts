@@ -10,8 +10,32 @@ import { randomUUID } from 'node:crypto';
 
 import { parse } from './parse.js';
 import { render } from './render.js';
+import { isLegacyFormat, migrateContent } from './migrate.js';
 import { DEFAULT_TITLE } from './model.js';
 import type { BacklogDocument } from './model.js';
+
+/**
+ * Thrown by `load`/`mutate` when the file is in the pre-rename format and the
+ * caller has not opted into migrating it (see `LoadOptions.migrate`).
+ */
+export class LegacyFormatError extends Error {
+  constructor() {
+    super(
+      'backlog.md is in the old pre-rename format (CRITICAL/STABLE/ARCHIVED ' +
+        'headings, "Admitted" field) and must be migrated before this can run.',
+    );
+    this.name = 'LegacyFormatError';
+  }
+}
+
+export interface LoadOptions {
+  /**
+   * When the file is in the pre-rename format: if true, migrate it in place
+   * before reading; if false/omitted, throw LegacyFormatError instead of
+   * reading it.
+   */
+  migrate?: boolean;
+}
 
 /** A fresh, empty backlog with the default title and no tasks. */
 export function createEmptyDocument(): BacklogDocument {
@@ -78,19 +102,43 @@ export class BacklogStore {
 
   constructor(private readonly filePath: string) {}
 
-  /** Read and parse the backlog, or an empty document if the file is absent. */
-  async load(): Promise<BacklogDocument> {
+  /**
+   * Read and parse the backlog, or an empty document if the file is absent.
+   * Throws LegacyFormatError if the file is pre-rename format and
+   * `options.migrate` isn't true; when it is true, the file is rewritten to
+   * the current format in place (under the same lock as any mutation) before
+   * being parsed.
+   */
+  async load(options: LoadOptions = {}): Promise<BacklogDocument> {
+    return this.runExclusive(() => this.loadLocked(options));
+  }
+
+  /** `load`'s body, assuming the caller already holds the exclusive lock. */
+  private async loadLocked(options: LoadOptions): Promise<BacklogDocument> {
+    let raw: string;
     try {
-      return parse(await readFile(this.filePath, 'utf8'));
+      raw = await readFile(this.filePath, 'utf8');
     } catch (err) {
       if (isNotFound(err)) return createEmptyDocument();
       throw err;
     }
+
+    if (isLegacyFormat(raw)) {
+      if (!options.migrate) throw new LegacyFormatError();
+      raw = migrateContent(raw);
+      await this.writeText(raw);
+    }
+
+    return parse(raw);
   }
 
   /** Atomically write a document to disk (temp file + rename). */
   async save(doc: BacklogDocument): Promise<void> {
-    const text = render(doc);
+    await this.writeText(render(doc));
+  }
+
+  /** Atomically write raw text to disk (temp file + rename). */
+  private async writeText(text: string): Promise<void> {
     const dir = dirname(this.filePath);
     await mkdir(dir, { recursive: true });
 
@@ -107,11 +155,15 @@ export class BacklogStore {
   /**
    * Run a read-modify-write mutation under an exclusive lock. The mutator
    * receives the current document, mutates it in place, and may return a
-   * result value; the updated document is then saved atomically.
+   * result value; the updated document is then saved atomically. See `load`
+   * for `options.migrate`.
    */
-  async mutate<T>(mutator: (doc: BacklogDocument) => T | Promise<T>): Promise<T> {
+  async mutate<T>(
+    mutator: (doc: BacklogDocument) => T | Promise<T>,
+    options: LoadOptions = {},
+  ): Promise<T> {
     return this.runExclusive(async () => {
-      const doc = await this.load();
+      const doc = await this.loadLocked(options);
       const result = await mutator(doc);
       await this.save(doc);
       return result;

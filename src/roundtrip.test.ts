@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import { parse } from './parse.js';
 import { render, renderSummary } from './render.js';
-import { DEFAULT_TITLE, LEDGER_HEADING, WARDS } from './model.js';
+import { DEFAULT_TITLE, DETAILS_HEADING, SECTIONS } from './model.js';
 import type { BacklogDocument } from './model.js';
 
-const [TODO_WARD, DONE_WARD, CLOSED_WARD] = WARDS;
+const [TODO_SECTION, DONE_SECTION, CLOSED_SECTION] = SECTIONS;
 
 /** A representative document exercising every field and passthrough slot. */
 function sampleDoc(): BacklogDocument {
@@ -17,7 +17,7 @@ function sampleDoc(): BacklogDocument {
         title: 'Implement OAuth2 login',
         description: 'Integrate Google and GitHub authentication.\nStore refresh tokens securely.',
         status: 'TODO',
-        admitted: '2026-07-16',
+        created: '2026-07-16',
         extraLines: ['* **Priority:** high'],
       },
       {
@@ -25,20 +25,20 @@ function sampleDoc(): BacklogDocument {
         title: 'Fix database migration timeout',
         description: 'The v2.1 migration fails on production.',
         status: 'DONE',
-        admitted: '2026-07-15',
+        created: '2026-07-15',
         resolution: 'Added an index concurrently before the column modification.',
         extraLines: [],
       },
     ],
     passthrough: {
       preamble: ['A note under the title.'],
-      midNotes: ['A note between the index and the ledger.'],
+      midNotes: ['A note between the index and the details.'],
     },
   };
 }
 
 describe('render', () => {
-  it('emits the canonical layout with all three wards, even empty ones', () => {
+  it('emits the canonical layout with all three sections, even empty ones', () => {
     const doc: BacklogDocument = {
       title: DEFAULT_TITLE,
       tasks: [
@@ -47,7 +47,7 @@ describe('render', () => {
           title: 'A task',
           description: 'A description.',
           status: 'TODO',
-          admitted: '2026-07-17',
+          created: '2026-07-17',
           extraLines: [],
         },
       ],
@@ -57,21 +57,21 @@ describe('render', () => {
     const expected = [
       `# ${DEFAULT_TITLE}`,
       '',
-      `## ${TODO_WARD.heading}`,
+      `## ${TODO_SECTION.heading}`,
       '- [ ] [#101: A task](#task-101)',
       '',
-      `## ${DONE_WARD.heading}`,
+      `## ${DONE_SECTION.heading}`,
       '',
-      `## ${CLOSED_WARD.heading}`,
+      `## ${CLOSED_SECTION.heading}`,
       '',
       '---',
       '',
-      `## ${LEDGER_HEADING}`,
+      `## ${DETAILS_HEADING}`,
       '',
       '<a id="task-101"></a>',
       '### #101: A task',
       '* **Status:** TODO',
-      '* **Admitted:** 2026-07-17',
+      '* **Created:** 2026-07-17',
       '* **Description:** A description.',
       '',
     ].join('\n');
@@ -109,19 +109,19 @@ describe('round trip', () => {
   it('preserves passthrough prose and unknown per-task fields', () => {
     const doc = parse(render(sampleDoc()));
     expect(doc.passthrough.preamble).toEqual(['A note under the title.']);
-    expect(doc.passthrough.midNotes).toEqual(['A note between the index and the ledger.']);
+    expect(doc.passthrough.midNotes).toEqual(['A note between the index and the details.']);
     expect(doc.tasks[0]!.extraLines).toEqual(['* **Priority:** high']);
   });
 });
 
 describe('renderSummary', () => {
-  it('includes the title, all wards, and index items but not the ledger', () => {
+  it('includes the title, all sections, and index items but not the task details', () => {
     const summary = renderSummary(sampleDoc());
     expect(summary).toContain(`# ${DEFAULT_TITLE}`);
-    for (const ward of WARDS) expect(summary).toContain(`## ${ward.heading}`);
+    for (const section of SECTIONS) expect(summary).toContain(`## ${section.heading}`);
     expect(summary).toContain('[#101: Implement OAuth2 login](#task-101)');
-    // No ledger content.
-    expect(summary).not.toContain(`## ${LEDGER_HEADING}`);
+    // No task details content.
+    expect(summary).not.toContain(`## ${DETAILS_HEADING}`);
     expect(summary).not.toContain('### #101');
     expect(summary).not.toContain('* **Status:**');
     expect(summary).not.toContain('<a id=');
@@ -142,8 +142,8 @@ describe('empty document', () => {
   it('renders the boilerplate skeleton', () => {
     const text = render(empty);
     expect(text).toContain(`# ${DEFAULT_TITLE}`);
-    expect(text).toContain(`## ${LEDGER_HEADING}`);
-    for (const ward of WARDS) expect(text).toContain(`## ${ward.heading}`);
+    expect(text).toContain(`## ${DETAILS_HEADING}`);
+    for (const section of SECTIONS) expect(text).toContain(`## ${section.heading}`);
   });
 
   it('round-trips the empty skeleton', () => {

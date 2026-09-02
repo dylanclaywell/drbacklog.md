@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -57,15 +57,15 @@ describe('MCP server', () => {
     );
   });
 
-  it('add_task admits a task and reports the diagnosis', async () => {
+  it('add_task creates a task and reports its id', async () => {
     const result = await call('add_task', { title: 'Login', description: 'OAuth2 flow.' });
-    expect(resultText(result)).toContain('#1 admitted to the TODO ward');
+    expect(resultText(result)).toContain('Created task #1');
   });
 
   it('moves a task to DONE with a resolution and reads it back', async () => {
     await call('add_task', { title: 'Login', description: 'OAuth2 flow.' });
     const moved = await call('move_task', { id: 1, status: 'DONE', resolution: 'Shipped.' });
-    expect(resultText(moved)).toContain('#1 successfully transferred to DONE');
+    expect(resultText(moved)).toContain('Task #1 moved to DONE');
 
     const detail = resultText(await call('get_task', { id: 1 }));
     expect(detail).toContain('Status: DONE');
@@ -75,19 +75,18 @@ describe('MCP server', () => {
   it('coerces a string id from the client', async () => {
     await call('add_task', { title: 'Login', description: 'OAuth2 flow.' });
     const detail = resultText(await call('get_task', { id: '1' }));
-    expect(detail).toContain('Patient #1 chart');
+    expect(detail).toContain('Task #1:');
   });
 
   it('returns an error result for an unknown id', async () => {
     const result = await call('move_task', { id: 999, status: 'DONE' });
     expect(result.isError).toBe(true);
-    expect(resultText(result)).toContain('No patient #999');
+    expect(resultText(result)).toContain('No task #999');
   });
 
-  it('get_backlog_summary lists tasks but omits the ledger', async () => {
+  it('get_backlog_summary lists tasks but omits the task details', async () => {
     await call('add_task', { title: 'Login', description: 'OAuth2 flow.' });
-    const summary = resultText(await call('get_backlog_summary'));
-    expect(summary).toContain('Backlog Health Chart');
+    const summary = resultText(await call('get_backlog_summary', {}));
     expect(summary).toContain('[#1: Login](#task-1)');
     expect(summary).not.toContain('* **Status:**');
   });
@@ -95,10 +94,57 @@ describe('MCP server', () => {
   it('export_backlog writes a JSON file to the export directory', async () => {
     await call('add_task', { title: 'Login', description: 'OAuth2 flow.' });
     const result = resultText(await call('export_backlog', { format: 'json' }));
-    expect(result).toContain('exported successfully to json');
+    expect(result).toContain('Exported to json');
 
     const written = await readFile(join(dir, 'backlog.json'), 'utf8');
     const parsed = JSON.parse(written) as Array<{ id: number; title: string }>;
     expect(parsed).toEqual([expect.objectContaining({ id: 1, title: 'Login' })]);
+  });
+
+  describe('legacy format', () => {
+    const LEGACY_FILE = [
+      '# 🏥 DrBacklog Patient Chart',
+      '',
+      '## 🚨 CRITICAL (TODO)',
+      '- [ ] [#1: Legacy task](#task-1)',
+      '',
+      '## 🩺 STABLE (DONE)',
+      '',
+      '## 🗂️ ARCHIVED (CLOSED)',
+      '',
+      '---',
+      '',
+      '## 🔬 Patient Ledger (Task Details)',
+      '',
+      '<a id="task-1"></a>',
+      '### #1: Legacy task',
+      '* **Status:** TODO',
+      '* **Admitted:** 2026-07-16',
+      '* **Description:** Predates the rename.',
+      '',
+    ].join('\n');
+
+    beforeEach(async () => {
+      await writeFile(join(dir, 'backlog.md'), LEGACY_FILE, 'utf8');
+    });
+
+    it('refuses to run and asks for migrate:true, without touching the file', async () => {
+      const result = await call('get_task', { id: 1 });
+      expect(result.isError).toBe(true);
+      expect(resultText(result)).toContain('migrate: true');
+      expect(await readFile(join(dir, 'backlog.md'), 'utf8')).toBe(LEGACY_FILE);
+    });
+
+    it('migrate:true migrates the file, then runs the originally requested tool call', async () => {
+      const result = await call('move_task', { id: 1, status: 'DONE', migrate: true });
+      expect(resultText(result)).toContain('Task #1 moved to DONE');
+
+      const onDisk = await readFile(join(dir, 'backlog.md'), 'utf8');
+      expect(onDisk).toContain('## TODO');
+      expect(onDisk).not.toContain('CRITICAL');
+
+      const detail = resultText(await call('get_task', { id: 1 }));
+      expect(detail).toContain('Status: DONE');
+    });
   });
 });
