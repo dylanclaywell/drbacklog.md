@@ -42,7 +42,7 @@ describe('MCP server', () => {
     return (await client.callTool({ name, arguments: args })) as TextResult;
   }
 
-  it('exposes all seven tools', async () => {
+  it('exposes all fourteen tools', async () => {
     const names = (await client.listTools()).tools.map((t) => t.name).sort();
     expect(names).toEqual(
       [
@@ -53,6 +53,13 @@ describe('MCP server', () => {
         'move_task',
         'remove_task',
         'update_task',
+        'add_epic',
+        'update_epic',
+        'remove_epic',
+        'set_task_epic',
+        'get_epic',
+        'list_epics',
+        'get_epic_tasks',
       ].sort(),
     );
   });
@@ -99,6 +106,74 @@ describe('MCP server', () => {
     const written = await readFile(join(dir, 'backlog.json'), 'utf8');
     const parsed = JSON.parse(written) as Array<{ id: number; title: string }>;
     expect(parsed).toEqual([expect.objectContaining({ id: 1, title: 'Login' })]);
+  });
+
+  describe('epics', () => {
+    it('add_epic creates an epic and reports its id', async () => {
+      const result = await call('add_epic', {
+        title: 'Auth overhaul',
+        description: 'Replace sessions.',
+      });
+      expect(resultText(result)).toContain('Created epic #1');
+    });
+
+    it('set_task_epic links a task, get_epic_tasks lists it, then unlinks', async () => {
+      await call('add_task', { title: 'Add OAuth', description: 'OAuth2 flow.' });
+      await call('add_epic', { title: 'Auth overhaul', description: 'Replace sessions.' });
+
+      const linked = await call('set_task_epic', { id: 1, epicId: 1 });
+      expect(resultText(linked)).toContain('Task #1 linked to epic #1');
+
+      const detail = resultText(await call('get_task', { id: 1 }));
+      expect(detail).toContain('* Epic: #1');
+
+      const tasks = resultText(await call('get_epic_tasks', { id: 1 }));
+      expect(tasks).toContain('[#1: Add OAuth](#task-1)');
+
+      const unlinked = await call('set_task_epic', { id: 1 });
+      expect(resultText(unlinked)).toContain('Task #1 unlinked from its epic');
+      expect(resultText(await call('get_epic_tasks', { id: 1 }))).toContain('No tasks linked');
+    });
+
+    it('get_epic and list_epics report epic details', async () => {
+      await call('add_epic', { title: 'Auth overhaul', description: 'Replace sessions.' });
+      expect(resultText(await call('get_epic', { id: 1 }))).toContain('Epic #1: Auth overhaul');
+      expect(resultText(await call('list_epics', {}))).toContain('#1: Auth overhaul');
+    });
+
+    it('update_epic edits a field', async () => {
+      await call('add_epic', { title: 'Auth overhaul', description: 'Replace sessions.' });
+      await call('update_epic', { id: 1, field: 'title', value: 'Auth revamp' });
+      expect(resultText(await call('get_epic', { id: 1 }))).toContain('Epic #1: Auth revamp');
+    });
+
+    it('remove_epic deletes the epic and unlinks its tasks', async () => {
+      await call('add_task', { title: 'Add OAuth', description: 'OAuth2 flow.' });
+      await call('add_epic', { title: 'Auth overhaul', description: 'Replace sessions.' });
+      await call('set_task_epic', { id: 1, epicId: 1 });
+
+      const removed = await call('remove_epic', { id: 1 });
+      expect(resultText(removed)).toContain('Epic #1 removed');
+
+      expect(await call('get_epic', { id: 1 })).toMatchObject({ isError: true });
+      expect(resultText(await call('get_epic_tasks', { id: 1 }))).toContain('No epic #1 found');
+
+      const detail = resultText(await call('get_task', { id: 1 }));
+      expect(detail).not.toContain('Epic');
+    });
+
+    it('returns an error for an unknown epic id', async () => {
+      const result = await call('get_epic', { id: 999 });
+      expect(result.isError).toBe(true);
+      expect(resultText(result)).toContain('No epic #999');
+    });
+
+    it('set_task_epic rejects linking to an unknown epic', async () => {
+      await call('add_task', { title: 'Add OAuth', description: 'OAuth2 flow.' });
+      const result = await call('set_task_epic', { id: 1, epicId: 999 });
+      expect(result.isError).toBe(true);
+      expect(resultText(result)).toContain('No epic #999');
+    });
   });
 
   describe('legacy format', () => {

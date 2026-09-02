@@ -5,9 +5,13 @@
 // from the task details every time (all three status sections always appear,
 // even when empty), and each task gets a stable `<a id="task-N">` anchor
 // derived from its id.
+//
+// The Epics zone is entirely opt-in: it's only emitted when doc.epics is
+// non-empty, so a backlog with no epics renders exactly as it did before
+// epics existed.
 
-import { anchorFor, DETAILS_HEADING, SECTIONS } from './model.js';
-import type { BacklogDocument, Task } from './model.js';
+import { anchorFor, DETAILS_HEADING, epicAnchorFor, EPICS_HEADING, SECTIONS } from './model.js';
+import type { BacklogDocument, Epic, Task } from './model.js';
 
 /**
  * Emit a `* **Label:** value` bullet, spilling any newlines in the value onto
@@ -39,9 +43,18 @@ function renderTask(task: Task): string[] {
   const lines = [`<a id="${anchorFor(task.id)}"></a>`, `### #${task.id}: ${task.title}`];
   lines.push(`* **Status:** ${task.status}`);
   lines.push(`* **Created:** ${task.created}`);
+  if (task.epicId !== undefined) lines.push(`* **Epic:** #${task.epicId}`);
   pushField(lines, 'Description', task.description);
   if (task.resolution !== undefined) pushField(lines, 'Resolution', task.resolution);
   lines.push(...task.extraLines);
+  return lines;
+}
+
+/** One epic detail block: anchor, heading, description, then preserved extras. */
+function renderEpic(epic: Epic): string[] {
+  const lines = [`<a id="${epicAnchorFor(epic.id)}"></a>`, `### Epic #${epic.id}: ${epic.title}`];
+  pushField(lines, 'Description', epic.description);
+  lines.push(...epic.extraLines);
   return lines;
 }
 
@@ -72,6 +85,11 @@ export function render(doc: BacklogDocument): string {
   blocks.push([`## ${DETAILS_HEADING}`]);
 
   for (const task of doc.tasks) blocks.push(renderTask(task));
+
+  if (doc.epics.length > 0) {
+    blocks.push([`## ${EPICS_HEADING}`]);
+    for (const epic of doc.epics) blocks.push(renderEpic(epic));
+  }
 
   return joinBlocks(blocks);
 }

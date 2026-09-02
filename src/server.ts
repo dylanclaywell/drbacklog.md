@@ -10,17 +10,25 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
+  addEpic,
   addTask,
+  EpicNotFoundError,
   exportBacklog,
+  getEpic,
+  getEpicTasks,
   getTask,
+  listEpics,
   moveTask,
+  removeEpic,
   removeTask,
+  setTaskEpic,
   TaskNotFoundError,
+  updateEpic,
   updateTask,
 } from './operations.js';
 import { renderSummary } from './render.js';
 import { LegacyFormatError, type BacklogStore, type LoadOptions } from './store.js';
-import type { Task } from './model.js';
+import type { Epic, Task } from './model.js';
 
 const idSchema = z.coerce.number().int().positive();
 
@@ -50,6 +58,10 @@ function errorText(body: string) {
 
 function notFound(id: number) {
   return errorText(`No task #${id} found.`);
+}
+
+function notFoundEpic(id: number) {
+  return errorText(`No epic #${id} found.`);
 }
 
 function legacyFormat() {
@@ -84,8 +96,25 @@ function formatTaskDetail(task: Task): string {
     `* Title: ${task.title}`,
     `* Description: ${task.description}`,
   ];
+  if (task.epicId !== undefined) lines.push(`* Epic: #${task.epicId}`);
   if (task.resolution !== undefined) lines.push(`* Resolution: ${task.resolution}`);
   return lines.join('\n');
+}
+
+function formatEpicDetail(epic: Epic): string {
+  return [`Epic #${epic.id}: ${epic.title}`, `* Description: ${epic.description}`].join('\n');
+}
+
+function formatEpicList(epics: Epic[]): string {
+  if (epics.length === 0) return 'No epics.';
+  return epics.map((epic) => `- #${epic.id}: ${epic.title}`).join('\n');
+}
+
+function formatEpicTaskList(epicId: number, tasks: Task[]): string {
+  if (tasks.length === 0) return `No tasks linked to epic #${epicId}.`;
+  return tasks
+    .map((task) => `- [#${task.id}: ${task.title}](#task-${task.id}) — ${task.status}`)
+    .join('\n');
 }
 
 export function createServer(store: BacklogStore, options: CreateServerOptions): McpServer {
@@ -223,6 +252,138 @@ export function createServer(store: BacklogStore, options: CreateServerOptions):
         const outPath = join(options.exportDir, filename);
         await writeFile(outPath, content, 'utf8');
         return text(`Exported to ${format} format. Saved to ${outPath}.`);
+      }),
+  );
+
+  server.registerTool(
+    'add_epic',
+    {
+      title: 'Add an epic',
+      description:
+        'Add a new epic: a named grouping of tasks. Opt-in — use only if the user wants to organize tasks into epics.',
+      inputSchema: {
+        title: z.string().min(1),
+        description: z.string(),
+        migrate: migrateSchema,
+      },
+    },
+    async ({ title, description, migrate }) =>
+      guarded(async () => {
+        const epic = await store.mutate((doc) => addEpic(doc, { title, description }), {
+          migrate,
+        });
+        return text(`Created epic #${epic.id}.`);
+      }),
+  );
+
+  server.registerTool(
+    'update_epic',
+    {
+      title: "Update an epic's field",
+      description: "Edit an epic's title or description.",
+      inputSchema: {
+        id: idSchema,
+        field: z.enum(['title', 'description']),
+        value: z.string(),
+        migrate: migrateSchema,
+      },
+    },
+    async ({ id, field, value, migrate }) =>
+      guarded(async () => {
+        try {
+          await store.mutate((doc) => updateEpic(doc, { id, field, value }), { migrate });
+          return text(`Epic #${id}'s ${field} updated.`);
+        } catch (err) {
+          if (err instanceof EpicNotFoundError) return notFoundEpic(id);
+          throw err;
+        }
+      }),
+  );
+
+  server.registerTool(
+    'remove_epic',
+    {
+      title: 'Delete an epic',
+      description: 'Permanently remove an epic. Tasks linked to it are unlinked, not deleted.',
+      inputSchema: { id: idSchema, migrate: migrateSchema },
+    },
+    async ({ id, migrate }) =>
+      guarded(async () => {
+        try {
+          await store.mutate((doc) => removeEpic(doc, id), { migrate });
+          return text(`Epic #${id} removed. Any linked tasks were unlinked.`);
+        } catch (err) {
+          if (err instanceof EpicNotFoundError) return notFoundEpic(id);
+          throw err;
+        }
+      }),
+  );
+
+  server.registerTool(
+    'set_task_epic',
+    {
+      title: "Link or unlink a task's epic",
+      description:
+        'Link a task to an epic. Omit epicId to unlink the task from whatever epic it was in.',
+      inputSchema: { id: idSchema, epicId: idSchema.optional(), migrate: migrateSchema },
+    },
+    async ({ id, epicId, migrate }) =>
+      guarded(async () => {
+        try {
+          await store.mutate((doc) => setTaskEpic(doc, { id, epicId }), { migrate });
+          return text(
+            epicId !== undefined
+              ? `Task #${id} linked to epic #${epicId}.`
+              : `Task #${id} unlinked from its epic.`,
+          );
+        } catch (err) {
+          if (err instanceof TaskNotFoundError) return notFound(id);
+          if (err instanceof EpicNotFoundError) return notFoundEpic(epicId ?? -1);
+          throw err;
+        }
+      }),
+  );
+
+  server.registerTool(
+    'get_epic',
+    {
+      title: 'Get an epic',
+      description: "Retrieve a single epic's title and description by id.",
+      inputSchema: { id: idSchema, migrate: migrateSchema },
+    },
+    async ({ id, migrate }) =>
+      guarded(async () => {
+        const epic = getEpic(await store.load({ migrate }), id);
+        return epic ? text(formatEpicDetail(epic)) : notFoundEpic(id);
+      }),
+  );
+
+  server.registerTool(
+    'list_epics',
+    {
+      title: 'List all epics',
+      description: 'Return a compact list of all epics (id and title only). Token-efficient.',
+      inputSchema: { migrate: migrateSchema },
+    },
+    async ({ migrate }) =>
+      guarded(async () => {
+        const epics = listEpics(await store.load({ migrate }));
+        return text(formatEpicList(epics));
+      }),
+  );
+
+  server.registerTool(
+    'get_epic_tasks',
+    {
+      title: 'List the tasks in an epic',
+      description: 'Return a compact list of all tasks linked to the given epic.',
+      inputSchema: { id: idSchema, migrate: migrateSchema },
+    },
+    async ({ id, migrate }) =>
+      guarded(async () => {
+        const doc = await store.load({ migrate });
+        if (!getEpic(doc, id)) return notFoundEpic(id);
+        return text(formatEpicTaskList(id, getEpicTasks(doc, id)));
       }),
   );
 

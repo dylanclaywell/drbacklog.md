@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { parse } from './parse.js';
 import { render, renderSummary } from './render.js';
-import { DEFAULT_TITLE, DETAILS_HEADING, SECTIONS } from './model.js';
+import { DEFAULT_TITLE, DETAILS_HEADING, EPICS_HEADING, SECTIONS } from './model.js';
 import type { BacklogDocument } from './model.js';
 
 const [TODO_SECTION, DONE_SECTION, CLOSED_SECTION] = SECTIONS;
@@ -11,6 +11,7 @@ const [TODO_SECTION, DONE_SECTION, CLOSED_SECTION] = SECTIONS;
 function sampleDoc(): BacklogDocument {
   return {
     title: DEFAULT_TITLE,
+    epics: [],
     tasks: [
       {
         id: 101,
@@ -41,6 +42,7 @@ describe('render', () => {
   it('emits the canonical layout with all three sections, even empty ones', () => {
     const doc: BacklogDocument = {
       title: DEFAULT_TITLE,
+      epics: [],
       tasks: [
         {
           id: 101,
@@ -136,6 +138,7 @@ describe('empty document', () => {
   const empty: BacklogDocument = {
     title: DEFAULT_TITLE,
     tasks: [],
+    epics: [],
     passthrough: { preamble: [], midNotes: [] },
   };
 
@@ -148,5 +151,61 @@ describe('empty document', () => {
 
   it('round-trips the empty skeleton', () => {
     expect(parse(render(empty))).toEqual(empty);
+  });
+
+  it('never emits an Epics section when there are no epics', () => {
+    expect(render(empty)).not.toContain(`## ${EPICS_HEADING}`);
+  });
+});
+
+describe('epics', () => {
+  function docWithEpic(): BacklogDocument {
+    return {
+      title: DEFAULT_TITLE,
+      passthrough: { preamble: [], midNotes: [] },
+      epics: [
+        {
+          id: 5,
+          title: 'Auth overhaul',
+          description: 'Replace the session system.',
+          extraLines: [],
+        },
+      ],
+      tasks: [
+        {
+          id: 1,
+          title: 'Add OAuth login',
+          description: 'Integrate Google.',
+          status: 'TODO',
+          created: '2026-07-17',
+          epicId: 5,
+          extraLines: [],
+        },
+        {
+          id: 2,
+          title: 'Unrelated task',
+          description: 'No epic.',
+          status: 'TODO',
+          created: '2026-07-17',
+          extraLines: [],
+        },
+      ],
+    };
+  }
+
+  it('emits an Epics section, and an Epic field only on linked tasks', () => {
+    const text = render(docWithEpic());
+    expect(text).toContain(`## ${EPICS_HEADING}`);
+    expect(text).toContain('<a id="epic-5"></a>');
+    expect(text).toContain('### Epic #5: Auth overhaul');
+    expect(text).toContain('* **Epic:** #5');
+
+    const task2Block = text.slice(text.indexOf('### #2:'));
+    expect(task2Block).not.toContain('* **Epic:**');
+  });
+
+  it('round-trips a document with epics, including the task -> epic link', () => {
+    const doc = docWithEpic();
+    expect(parse(render(doc))).toEqual(doc);
   });
 });

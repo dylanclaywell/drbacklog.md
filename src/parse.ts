@@ -12,27 +12,39 @@
 // pre-rename headings and the old `Admitted` field name, so a legacy file can
 // be read once for migration (see migrate.ts) without teaching the canonical
 // parser about a format it should never write.
+//
+// Epics are an entirely optional trailing zone: a document with none never
+// enters the 'epics' state below, so a backlog.md with no epics round-trips
+// identically to before epics existed.
 
-import { DEFAULT_TITLE, DETAILS_HEADING, SECTIONS } from './model.js';
-import type { BacklogDocument, Passthrough, Task, TaskStatus } from './model.js';
+import { DEFAULT_TITLE, DETAILS_HEADING, EPICS_HEADING, SECTIONS } from './model.js';
+import type { BacklogDocument, Epic, Passthrough, Task, TaskStatus } from './model.js';
 
-type FieldKey = 'status' | 'created' | 'description' | 'resolution';
+type FieldKey = 'status' | 'created' | 'epic' | 'description' | 'resolution';
 
 const H1_RE = /^#\s+(.*\S)\s*$/;
 const H2_RE = /^##\s+(.*\S)\s*$/;
 const DIVIDER_RE = /^-{3,}\s*$/;
-const ANCHOR_RE = /^<a\s+id="task-\d+"\s*><\/a>\s*$/i;
+const ANCHOR_RE = /^<a\s+id="(?:task|epic)-\d+"\s*><\/a>\s*$/i;
 const INDEX_ITEM_RE = /^-\s*\[[ xX]\]\s+\[.*\]\(#.*\)\s*$/;
 const TASK_HEADING_RE = /^###\s+#(\d+):\s*(.*?)\s*$/;
+const EPIC_HEADING_RE = /^###\s+Epic\s+#(\d+):\s*(.*?)\s*$/;
 // Matches any `* **Key:** value` bullet; the key is classified afterward.
 const FIELD_RE = /^\*\s+\*\*([^:*]+):\*\*\s?(.*)$/;
+// An epic reference field's value is just `#5` (or `5`); no markdown link.
+const EPIC_REF_RE = /^#?(\d+)/;
 
 const KNOWN_FIELDS: ReadonlySet<string> = new Set<FieldKey>([
   'status',
   'created',
+  'epic',
   'description',
   'resolution',
 ]);
+
+// Epic blocks recognize only Description; epics have no status/created/epic
+// fields of their own.
+const KNOWN_EPIC_FIELDS: ReadonlySet<string> = new Set(['description']);
 
 /**
  * The vocabulary a parse pass recognizes. The canonical dialect matches only
@@ -42,6 +54,7 @@ const KNOWN_FIELDS: ReadonlySet<string> = new Set<FieldKey>([
 interface Dialect {
   sectionHeadings: ReadonlySet<string>;
   detailsHeadings: ReadonlySet<string>;
+  epicsHeadings: ReadonlySet<string>;
   /** Maps a lowercased legacy field key to the canonical `FieldKey` it means. */
   fieldAliases: Readonly<Partial<Record<string, FieldKey>>>;
 }
@@ -49,6 +62,7 @@ interface Dialect {
 const CURRENT_DIALECT: Dialect = {
   sectionHeadings: new Set(SECTIONS.map((s) => s.heading)),
   detailsHeadings: new Set([DETAILS_HEADING]),
+  epicsHeadings: new Set([EPICS_HEADING]),
   fieldAliases: {},
 };
 
@@ -77,8 +91,20 @@ function isDetailsHeading(line: string, dialect: Dialect): boolean {
   return text !== null && dialect.detailsHeadings.has(text);
 }
 
+function isEpicsHeading(line: string, dialect: Dialect): boolean {
+  const text = h2Text(line);
+  return text !== null && dialect.epicsHeadings.has(text);
+}
+
 function matchTaskHeading(line: string): { id: number; title: string } | null {
   const m = TASK_HEADING_RE.exec(line);
+  if (!m) return null;
+  const [, idStr = '', title = ''] = m;
+  return { id: Number(idStr), title };
+}
+
+function matchEpicHeading(line: string): { id: number; title: string } | null {
+  const m = EPIC_HEADING_RE.exec(line);
   if (!m) return null;
   const [, idStr = '', title = ''] = m;
   return { id: Number(idStr), title };
@@ -91,6 +117,20 @@ function matchField(line: string, dialect: Dialect): { key: FieldKey; value: str
   const key = rawKey.trim().toLowerCase();
   const resolved = dialect.fieldAliases[key] ?? key;
   return KNOWN_FIELDS.has(resolved) ? { key: resolved as FieldKey, value } : null;
+}
+
+/** Epic blocks only ever recognize Description; no dialect/aliases needed. */
+function matchEpicField(line: string): { value: string } | null {
+  const m = FIELD_RE.exec(line);
+  if (!m) return null;
+  const [, rawKey = '', value = ''] = m;
+  return KNOWN_EPIC_FIELDS.has(rawKey.trim().toLowerCase()) ? { value } : null;
+}
+
+/** Parse an epic reference field's value (`#5` or `5`) to an id, if valid. */
+function parseEpicRef(value: string): number | undefined {
+  const m = EPIC_REF_RE.exec(value.trim());
+  return m ? Number(m[1]) : undefined;
 }
 
 function parseStatus(value: string): TaskStatus {
@@ -107,6 +147,9 @@ function applyField(task: Task, key: FieldKey, value: string): void {
       break;
     case 'created':
       task.created = value.trim();
+      break;
+    case 'epic':
+      task.epicId = parseEpicRef(value);
       break;
     case 'description':
       task.description = value;
@@ -133,7 +176,8 @@ function trimBlankEdges(lines: string[]): string[] {
 //   index       the status section lists (derived; discarded and rebuilt on render)
 //   midNotes    notes after the index / divider, before the details zone
 //   details     the task detail blocks (the authoritative task data)
-type State = 'preTitle' | 'preamble' | 'index' | 'midNotes' | 'details';
+//   epics       the optional epic detail blocks, after the task details
+type State = 'preTitle' | 'preamble' | 'index' | 'midNotes' | 'details' | 'epics';
 
 function parseWithDialect(content: string, dialect: Dialect): BacklogDocument {
   const lines = content.split(/\r?\n/);
@@ -142,12 +186,16 @@ function parseWithDialect(content: string, dialect: Dialect): BacklogDocument {
   const preamble: string[] = [];
   const midNotes: string[] = [];
   const tasks: Task[] = [];
+  const epics: Epic[] = [];
 
   let state: State = 'preTitle';
   // The task currently being filled in the details zone, and which multi-line
   // field (if any) trailing prose should append to.
   let cur: Task | null = null;
   let curField: 'description' | 'resolution' | null = null;
+  // Same idea, for the epic currently being filled in the epics zone.
+  let curEpic: Epic | null = null;
+  let curEpicField: 'description' | null = null;
 
   for (const line of lines) {
     switch (state) {
@@ -164,6 +212,7 @@ function parseWithDialect(content: string, dialect: Dialect): BacklogDocument {
 
       case 'preamble': {
         if (isDetailsHeading(line, dialect)) state = 'details';
+        else if (isEpicsHeading(line, dialect)) state = 'epics';
         else if (isSectionHeading(line, dialect)) state = 'index';
         else if (isDivider(line)) state = 'midNotes';
         else preamble.push(line);
@@ -174,6 +223,7 @@ function parseWithDialect(content: string, dialect: Dialect): BacklogDocument {
         // The index is derived and rebuilt on render, so drop its headings and
         // list items; keep only stray human prose.
         if (isDetailsHeading(line, dialect)) state = 'details';
+        else if (isEpicsHeading(line, dialect)) state = 'epics';
         else if (isDivider(line)) state = 'midNotes';
         else if (isSectionHeading(line, dialect) || isIndexItem(line) || isBlank(line)) break;
         else midNotes.push(line);
@@ -182,6 +232,7 @@ function parseWithDialect(content: string, dialect: Dialect): BacklogDocument {
 
       case 'midNotes': {
         if (isDetailsHeading(line, dialect)) state = 'details';
+        else if (isEpicsHeading(line, dialect)) state = 'epics';
         else if (isSectionHeading(line, dialect)) state = 'index';
         else if (isDivider(line) || isBlank(line)) break;
         else midNotes.push(line);
@@ -189,6 +240,12 @@ function parseWithDialect(content: string, dialect: Dialect): BacklogDocument {
       }
 
       case 'details': {
+        if (isEpicsHeading(line, dialect)) {
+          state = 'epics';
+          curField = null;
+          break;
+        }
+
         if (isAnchor(line)) {
           // Anchors are regenerated from the task id on render.
           curField = null;
@@ -250,6 +307,48 @@ function parseWithDialect(content: string, dialect: Dialect): BacklogDocument {
         }
         break;
       }
+
+      case 'epics': {
+        if (isAnchor(line)) {
+          curEpicField = null;
+          break;
+        }
+
+        const head = matchEpicHeading(line);
+        if (head) {
+          curEpic = { id: head.id, title: head.title, description: '', extraLines: [] };
+          epics.push(curEpic);
+          curEpicField = null;
+          break;
+        }
+
+        if (!curEpic) {
+          if (!isBlank(line)) midNotes.push(line);
+          break;
+        }
+
+        const field = matchEpicField(line);
+        if (field) {
+          curEpic.description = field.value;
+          curEpicField = 'description';
+          break;
+        }
+
+        if (FIELD_RE.test(line)) {
+          curEpic.extraLines.push(line);
+          curEpicField = null;
+          break;
+        }
+
+        if (isBlank(line)) {
+          curEpicField = null;
+        } else if (curEpicField === 'description') {
+          curEpic.description += '\n' + line;
+        } else {
+          curEpic.extraLines.push(line);
+        }
+        break;
+      }
     }
   }
 
@@ -257,13 +356,16 @@ function parseWithDialect(content: string, dialect: Dialect): BacklogDocument {
     task.description = task.description.trimEnd();
     if (task.resolution !== undefined) task.resolution = task.resolution.trimEnd();
   }
+  for (const epic of epics) {
+    epic.description = epic.description.trimEnd();
+  }
 
   const passthrough: Passthrough = {
     preamble: trimBlankEdges(preamble),
     midNotes: trimBlankEdges(midNotes),
   };
 
-  return { title, tasks, passthrough };
+  return { title, tasks, epics, passthrough };
 }
 
 /** Parse canonical-format backlog.md text (what the renderer emits today). */
@@ -273,7 +375,8 @@ export function parse(content: string): BacklogDocument {
 
 // Pre-rename (hospital-themed) headings and field name, recognized only by
 // parseLegacy for one-time migration (see migrate.ts). Also accepts the
-// current headings, so a partially hand-edited file still parses.
+// current headings, so a partially hand-edited file still parses. Epics
+// postdate the rename, so they need no legacy vocabulary of their own.
 const LEGACY_DIALECT: Dialect = {
   sectionHeadings: new Set([
     ...CURRENT_DIALECT.sectionHeadings,
@@ -285,6 +388,7 @@ const LEGACY_DIALECT: Dialect = {
     ...CURRENT_DIALECT.detailsHeadings,
     '🔬 Patient Ledger (Task Details)',
   ]),
+  epicsHeadings: CURRENT_DIALECT.epicsHeadings,
   fieldAliases: { admitted: 'created' },
 };
 

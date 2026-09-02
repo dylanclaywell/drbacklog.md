@@ -2,9 +2,9 @@
 //
 // Every function here mutates or reads the in-memory model and is free of I/O,
 // so it can be unit-tested directly. The MCP layer wires these to the store and
-// wraps them with input validation and themed result strings.
+// wraps them with input validation and plain result strings.
 
-import type { BacklogDocument, Task, TaskStatus } from './model.js';
+import type { BacklogDocument, Epic, Task, TaskStatus } from './model.js';
 
 /** Thrown when an operation references a task id that is not in the backlog. */
 export class TaskNotFoundError extends Error {
@@ -14,11 +14,26 @@ export class TaskNotFoundError extends Error {
   }
 }
 
+/** Thrown when an operation references an epic id that is not in the backlog. */
+export class EpicNotFoundError extends Error {
+  constructor(public readonly id: number) {
+    super(`No epic with id ${id}`);
+    this.name = 'EpicNotFoundError';
+  }
+}
+
 /** Find a task by id or throw TaskNotFoundError. */
 function findTaskOrThrow(doc: BacklogDocument, id: number): Task {
   const task = doc.tasks.find((t) => t.id === id);
   if (!task) throw new TaskNotFoundError(id);
   return task;
+}
+
+/** Find an epic by id or throw EpicNotFoundError. */
+function findEpicOrThrow(doc: BacklogDocument, id: number): Epic {
+  const epic = doc.epics.find((e) => e.id === id);
+  if (!epic) throw new EpicNotFoundError(id);
+  return epic;
 }
 
 /** The next task id: one past the highest existing id (1 for an empty backlog). */
@@ -162,4 +177,90 @@ export function exportBacklog(doc: BacklogDocument, format: ExportFormat): Expor
     return { filename: 'backlog.json', content: JSON.stringify(rows, null, 2) + '\n' };
   }
   return { filename: 'backlog.csv', content: toCsv(rows) };
+}
+
+// --- Epics ---------------------------------------------------------------
+//
+// Epics are an opt-in grouping of tasks: a document with none never grows an
+// Epics section (see render.ts). An epic has no lifecycle of its own — see
+// findEpicOrThrow above for lookup, and Epic in model.ts for the shape.
+
+/** The next epic id: one past the highest existing id (1 for no epics). */
+export function nextEpicId(doc: BacklogDocument): number {
+  return doc.epics.reduce((max, epic) => Math.max(max, epic.id), 0) + 1;
+}
+
+export interface AddEpicInput {
+  title: string;
+  description: string;
+}
+
+/** Add a new epic and return it. */
+export function addEpic(doc: BacklogDocument, input: AddEpicInput): Epic {
+  const epic: Epic = {
+    id: nextEpicId(doc),
+    title: input.title,
+    description: input.description,
+    extraLines: [],
+  };
+  doc.epics.push(epic);
+  return epic;
+}
+
+export interface UpdateEpicInput {
+  id: number;
+  field: 'title' | 'description';
+  value: string;
+}
+
+/** Update a single text field on an epic. */
+export function updateEpic(doc: BacklogDocument, input: UpdateEpicInput): Epic {
+  const epic = findEpicOrThrow(doc, input.id);
+  epic[input.field] = input.value;
+  return epic;
+}
+
+/**
+ * Remove an epic and return it. Any tasks linked to it are unlinked
+ * (`epicId` cleared) rather than left pointing at a dangling id.
+ */
+export function removeEpic(doc: BacklogDocument, id: number): Epic {
+  const epic = findEpicOrThrow(doc, id);
+  doc.epics = doc.epics.filter((e) => e.id !== id);
+  for (const task of doc.tasks) {
+    if (task.epicId === id) task.epicId = undefined;
+  }
+  return epic;
+}
+
+/** Look up an epic by id, or undefined if there is no such epic. */
+export function getEpic(doc: BacklogDocument, id: number): Epic | undefined {
+  return doc.epics.find((e) => e.id === id);
+}
+
+/** All epics, in the order they were created. */
+export function listEpics(doc: BacklogDocument): Epic[] {
+  return doc.epics;
+}
+
+/** All tasks currently linked to the given epic. */
+export function getEpicTasks(doc: BacklogDocument, epicId: number): Task[] {
+  return doc.tasks.filter((t) => t.epicId === epicId);
+}
+
+export interface SetTaskEpicInput {
+  id: number;
+  /** The epic to link the task to; omit to unlink the task from any epic. */
+  epicId?: number;
+}
+
+/**
+ * Link a task to an epic, or unlink it (when `epicId` is omitted). Throws
+ * TaskNotFoundError / EpicNotFoundError if either id doesn't exist.
+ */
+export function setTaskEpic(doc: BacklogDocument, input: SetTaskEpicInput): Task {
+  const task = findTaskOrThrow(doc, input.id);
+  if (input.epicId !== undefined) findEpicOrThrow(doc, input.epicId);
+  task.epicId = input.epicId;
+  return task;
 }

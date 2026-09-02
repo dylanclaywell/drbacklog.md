@@ -33,6 +33,25 @@ export interface Task {
    * human edits survive a round trip.
    */
   extraLines: string[];
+  /**
+   * The epic this task belongs to, if any (see `Epic`). Optional and entirely
+   * opt-in: a backlog with no epics renders and parses exactly as before.
+   */
+  epicId?: number;
+}
+
+/**
+ * An epic: a named grouping of tasks. Opt-in — a document with no epics never
+ * emits the Epics section, so existing backlog.md files are unaffected. Has
+ * no lifecycle of its own; whether its tasks are done is tracked per-task.
+ */
+export interface Epic {
+  /** Unique, monotonically assigned. Never reused once retired. */
+  id: number;
+  title: string;
+  description: string;
+  /** Same passthrough purpose as Task.extraLines. */
+  extraLines: string[];
 }
 
 /**
@@ -57,6 +76,8 @@ export interface BacklogDocument {
   /** The H1 title text, without the leading `# `. */
   title: string;
   tasks: Task[];
+  /** Empty unless epics are in use (see `Epic`). */
+  epics: Epic[];
   passthrough: Passthrough;
 }
 
@@ -86,6 +107,9 @@ export const DEFAULT_TITLE = 'DrBacklog';
 /** Heading text (following `## `) for the task details zone. */
 export const DETAILS_HEADING = 'Task Details';
 
+/** Heading text (following `## `) for the optional epics zone. */
+export const EPICS_HEADING = 'Epics';
+
 /** Look up the section spec for a status. */
 export function sectionFor(status: TaskStatus): SectionSpec {
   const section = SECTIONS.find((s) => s.status === status);
@@ -97,4 +121,9 @@ export function sectionFor(status: TaskStatus): SectionSpec {
 /** Derive the stable index anchor for a task id (matches the details heading). */
 export function anchorFor(id: number): string {
   return `task-${id}`;
+}
+
+/** Derive the stable anchor for an epic id (matches the epics heading). */
+export function epicAnchorFor(id: number): string {
+  return `epic-${id}`;
 }

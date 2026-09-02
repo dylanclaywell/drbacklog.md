@@ -50,6 +50,41 @@ title never breaks the index links.
 Content the parser doesn't recognize (freeform notes, unknown fields) is
 preserved verbatim on a round trip, so hand-edits survive.
 
+### Epics (optional)
+
+Tasks can optionally be grouped into epics. This is entirely opt-in: a
+backlog with no epics renders exactly as above, with no extra section. An
+epic is just a named grouping — it has no status of its own; whether its
+tasks are done is tracked per-task, same as always.
+
+Once a task is linked to an epic, its details block gains an `Epic` field and
+an `## Epics` section appears at the end of the file:
+
+```markdown
+<a id="task-101"></a>
+
+### #101: Implement OAuth2 login
+
+- **Status:** TODO
+- **Created:** 2026-07-16
+- **Epic:** #5
+- **Description:** Integrate Google and GitHub authentication.
+
+## Epics
+
+<a id="epic-5"></a>
+
+### Epic #5: Auth overhaul
+
+- **Description:** Replace the old session system.
+```
+
+The top index never shows epic membership (it stays exactly the compact
+checkbox list it's always been) — that's only visible in a task's or epic's
+own details. Manage epics with `add_epic`, `update_epic`, `remove_epic`, and
+`set_task_epic` (link or, called with no `epicId`, unlink); read them back
+with `get_epic`, `list_epics`, and `get_epic_tasks` (see [Tools](#tools)).
+
 ### Migrating an old (pre-rename) `backlog.md`
 
 Versions before 0.3.0 used a hospital-themed format (`🚨 CRITICAL (TODO)`,
@@ -166,6 +201,13 @@ The file is created with an empty skeleton on first run if it doesn't exist.
 | `get_task`            | Retrieve one task's full details by id.                    |
 | `get_backlog_summary` | Compact list of all tasks by status, without the details.  |
 | `export_backlog`      | Export all tasks to a CSV or JSON file for external tools. |
+| `add_epic`            | Add a new epic.                                            |
+| `update_epic`         | Edit an epic's title or description.                       |
+| `remove_epic`         | Permanently delete an epic (unlinks its tasks, not delete). |
+| `set_task_epic`       | Link a task to an epic; omit `epicId` to unlink.            |
+| `get_epic`            | Retrieve one epic's title and description by id.            |
+| `list_epics`          | Compact list of all epics (id and title only).             |
+| `get_epic_tasks`      | Compact list of all tasks linked to a given epic.           |
 
 ## Development
 

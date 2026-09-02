@@ -1,13 +1,22 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  addEpic,
   addTask,
+  EpicNotFoundError,
   exportBacklog,
+  getEpic,
+  getEpicTasks,
   getTask,
+  listEpics,
   moveTask,
+  nextEpicId,
   nextId,
+  removeEpic,
   removeTask,
+  setTaskEpic,
   TaskNotFoundError,
+  updateEpic,
   updateTask,
 } from './operations.js';
 import { createEmptyDocument } from './store.js';
@@ -205,5 +214,107 @@ describe('exportBacklog', () => {
 
   it('exports an empty backlog as an empty JSON array', () => {
     expect(exportBacklog(createEmptyDocument(), 'json').content).toBe('[]\n');
+  });
+});
+
+describe('epics', () => {
+  function docWithEpic(): { doc: ReturnType<typeof createEmptyDocument>; id: number } {
+    const doc = createEmptyDocument();
+    const epic = addEpic(doc, { title: 'Auth overhaul', description: 'Replace sessions.' });
+    return { doc, id: epic.id };
+  }
+
+  describe('nextEpicId', () => {
+    it('starts at 1 for no epics', () => {
+      expect(nextEpicId(createEmptyDocument())).toBe(1);
+    });
+
+    it('returns one past the highest existing id', () => {
+      const { doc } = docWithEpic();
+      expect(nextEpicId(doc)).toBe(2);
+    });
+  });
+
+  describe('addEpic', () => {
+    it('adds an epic with the next id and given fields', () => {
+      const doc = createEmptyDocument();
+      const epic = addEpic(doc, { title: 'Auth overhaul', description: 'Replace sessions.' });
+      expect(epic).toEqual({
+        id: 1,
+        title: 'Auth overhaul',
+        description: 'Replace sessions.',
+        extraLines: [],
+      });
+      expect(doc.epics).toEqual([epic]);
+    });
+  });
+
+  describe('updateEpic', () => {
+    it('updates the requested field only', () => {
+      const { doc, id } = docWithEpic();
+      const epic = updateEpic(doc, { id, field: 'title', value: 'Auth revamp' });
+      expect(epic.title).toBe('Auth revamp');
+      expect(epic.description).toBe('Replace sessions.');
+    });
+
+    it('throws EpicNotFoundError for an unknown id', () => {
+      const doc = createEmptyDocument();
+      expect(() => updateEpic(doc, { id: 999, field: 'title', value: 'x' })).toThrow(
+        EpicNotFoundError,
+      );
+    });
+  });
+
+  describe('removeEpic', () => {
+    it('removes the epic and unlinks any tasks pointing at it', () => {
+      const { doc, id } = docWithEpic();
+      const task = addTask(doc, { title: 'a', description: '', created: '2026-07-17' });
+      setTaskEpic(doc, { id: task.id, epicId: id });
+
+      const removed = removeEpic(doc, id);
+      expect(removed.id).toBe(id);
+      expect(doc.epics).toEqual([]);
+      expect(getTask(doc, task.id)?.epicId).toBeUndefined();
+    });
+
+    it('throws EpicNotFoundError for an unknown id', () => {
+      const doc = createEmptyDocument();
+      expect(() => removeEpic(doc, 999)).toThrow(EpicNotFoundError);
+    });
+  });
+
+  describe('getEpic / listEpics', () => {
+    it('finds an epic by id, and lists all epics', () => {
+      const { doc, id } = docWithEpic();
+      expect(getEpic(doc, id)?.id).toBe(id);
+      expect(getEpic(doc, 999)).toBeUndefined();
+      expect(listEpics(doc)).toEqual(doc.epics);
+    });
+  });
+
+  describe('setTaskEpic / getEpicTasks', () => {
+    it('links a task to an epic, then unlinks it', () => {
+      const { doc, id } = docWithEpic();
+      const task = addTask(doc, { title: 'a', description: '', created: '2026-07-17' });
+
+      setTaskEpic(doc, { id: task.id, epicId: id });
+      expect(getTask(doc, task.id)?.epicId).toBe(id);
+      expect(getEpicTasks(doc, id)).toEqual([getTask(doc, task.id)]);
+
+      setTaskEpic(doc, { id: task.id });
+      expect(getTask(doc, task.id)?.epicId).toBeUndefined();
+      expect(getEpicTasks(doc, id)).toEqual([]);
+    });
+
+    it('throws TaskNotFoundError for an unknown task id', () => {
+      const { doc, id } = docWithEpic();
+      expect(() => setTaskEpic(doc, { id: 999, epicId: id })).toThrow(TaskNotFoundError);
+    });
+
+    it('throws EpicNotFoundError for an unknown epic id', () => {
+      const doc = createEmptyDocument();
+      const task = addTask(doc, { title: 'a', description: '', created: '2026-07-17' });
+      expect(() => setTaskEpic(doc, { id: task.id, epicId: 999 })).toThrow(EpicNotFoundError);
+    });
   });
 });

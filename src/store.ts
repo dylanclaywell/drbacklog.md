@@ -39,7 +39,12 @@ export interface LoadOptions {
 
 /** A fresh, empty backlog with the default title and no tasks. */
 export function createEmptyDocument(): BacklogDocument {
-  return { title: DEFAULT_TITLE, tasks: [], passthrough: { preamble: [], midNotes: [] } };
+  return {
+    title: DEFAULT_TITLE,
+    tasks: [],
+    epics: [],
+    passthrough: { preamble: [], midNotes: [] },
+  };
 }
 
 /**
