@@ -46,6 +46,20 @@ describe('fuzzyScore', () => {
     expect(exact).toBeGreaterThan(withExtra);
   });
 
+  it('does not penalize a match starting deep in the string for its position alone', () => {
+    // Regression: the first matched character used to be penalized by its
+    // absolute position in `target`, so a strong contiguous match starting
+    // late in a long string would lose to a weak scattered match starting
+    // at position 0. A literal "ci" inside a real word should beat a
+    // scattered c...i split across an earlier, unrelated word.
+    const strongButLate = fuzzyScore(
+      'ci',
+      'Add GitHub Actions workflows (CI, release-please, publish)',
+    );
+    const weakButEarly = fuzzyScore('ci', 'Consider a persistent id counter');
+    expect(strongButLate).toBeGreaterThan(weakButEarly);
+  });
+
   it('prefers a shorter target when match quality is otherwise equal', () => {
     const short = fuzzyScore('cache', 'cache');
     const long = fuzzyScore('cache', 'cache' + 'x'.repeat(50));
