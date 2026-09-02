@@ -3,9 +3,9 @@
 ## TODO
 - [ ] [#1: Add per-project override note to README](#task-1)
 - [ ] [#2: Consider a persistent id counter](#task-2)
+- [ ] [#3: Add GitHub Actions workflows (CI, release-please, publish)](#task-3)
 
 ## DONE
-- [x] [#3: Add GitHub Actions workflows (CI, release-please, publish)](#task-3)
 
 ## CLOSED
 
@@ -27,7 +27,7 @@
 
 <a id="task-3"></a>
 ### #3: Add GitHub Actions workflows (CI, release-please, publish)
-* **Status:** DONE
+* **Status:** TODO
 * **Created:** 2026-07-17
 * **Description:** Set up GitHub workflows: (1) CI to build/typecheck/lint/test on push and PR; (2) release-please to automate releases and changelog generation from conventional commits; (3) publish the package to the GitHub npm registry on release.
 * **Resolution:** Added .github/workflows/ci.yml (typecheck/lint/format/test/build on push+PR) and release.yml (release-please + npm pack tarball to GitHub Release), release-please-config.json, .release-please-manifest.json. Distribution via GitHub Releases, no npm registry.
