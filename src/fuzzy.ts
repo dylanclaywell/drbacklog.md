@@ -90,7 +90,11 @@ export function fuzzyScore(query: string, target: string): number {
   const t = target.toLowerCase();
 
   let best: number | undefined;
-  for (let anchor = t.indexOf(q[0] as string); anchor !== -1; anchor = t.indexOf(q[0] as string, anchor + 1)) {
+  for (
+    let anchor = t.indexOf(q[0] as string);
+    anchor !== -1;
+    anchor = t.indexOf(q[0] as string, anchor + 1)
+  ) {
     const score = scoreFromAnchor(q, t, anchor);
     if (score !== undefined && (best === undefined || score > best)) best = score;
   }

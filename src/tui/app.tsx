@@ -65,7 +65,12 @@ const LIST_MARGIN_ROWS = 1;
 const DETAIL_MARGIN_ROWS = 1;
 const FOOTER_ROWS = 1 + 1;
 const BASE_CHROME_HEIGHT =
-  TITLE_ROWS + FILTER_ROWS + LIST_MARGIN_ROWS + DETAIL_MARGIN_ROWS + DETAIL_PANE_HEIGHT + FOOTER_ROWS;
+  TITLE_ROWS +
+  FILTER_ROWS +
+  LIST_MARGIN_ROWS +
+  DETAIL_MARGIN_ROWS +
+  DETAIL_PANE_HEIGHT +
+  FOOTER_ROWS;
 
 export function App({ store, backlogPath }: AppProps): React.ReactElement {
   const { exit } = useApp();
@@ -187,14 +192,18 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
       return;
     }
     if (key.rightArrow) {
-      setTab((t) => STATUS_ORDER[(STATUS_ORDER.indexOf(t) + 1) % STATUS_ORDER.length] as TaskStatus);
+      setTab(
+        (t) => STATUS_ORDER[(STATUS_ORDER.indexOf(t) + 1) % STATUS_ORDER.length] as TaskStatus,
+      );
       setSelected(0);
       return;
     }
     if (key.leftArrow) {
       setTab(
         (t) =>
-          STATUS_ORDER[(STATUS_ORDER.indexOf(t) - 1 + STATUS_ORDER.length) % STATUS_ORDER.length] as TaskStatus,
+          STATUS_ORDER[
+            (STATUS_ORDER.indexOf(t) - 1 + STATUS_ORDER.length) % STATUS_ORDER.length
+          ] as TaskStatus,
       );
       setSelected(0);
       return;
@@ -273,7 +282,7 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
           );
         })}
         {total > start + items.length && (
-          <Text dimColor>  +{total - start - items.length} more</Text>
+          <Text dimColor> +{total - start - items.length} more</Text>
         )}
       </Box>
     );
@@ -285,7 +294,7 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
         <Text bold color={THEME.accent}>
           DrBacklog
         </Text>
-        <Text dimColor>  {backlogPath}</Text>
+        <Text dimColor> {backlogPath}</Text>
       </Box>
       <Box
         width={stdout.columns}
@@ -326,11 +335,11 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
                 {'  '}
               </Text>
             ))}
-            <Text dimColor>  ←/→ pick · enter confirm · esc cancel</Text>
+            <Text dimColor> ←/→ pick · enter confirm · esc cancel</Text>
           </Box>
         ) : (
           <Box>
-            <Text dimColor>Filter  </Text>
+            <Text dimColor>Filter </Text>
             <Text color={filterMode ? THEME.accent : undefined}>{query || '—'}</Text>
             {filterMode && <Text color={THEME.accent}>▏</Text>}
           </Box>
@@ -347,7 +356,9 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
             const isSelected = visibleStart + i === selected;
             return (
               <Box key={task.id}>
-                <Text color={isSelected ? THEME.accent : undefined}>{isSelected ? '❯ ' : '  '}</Text>
+                <Text color={isSelected ? THEME.accent : undefined}>
+                  {isSelected ? '❯ ' : '  '}
+                </Text>
                 <Text dimColor={!isSelected}>#{task.id} </Text>
                 <Text bold={isSelected} color={isSelected ? THEME.accent : undefined}>
                   {task.title}
@@ -357,7 +368,8 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
           })}
           {maxStart > 0 && (
             <Text dimColor>
-              [{visibleStart + 1}-{Math.min(visibleStart + contentHeight, list.length)} of {list.length}]
+              [{visibleStart + 1}-{Math.min(visibleStart + contentHeight, list.length)} of{' '}
+              {list.length}]
             </Text>
           )}
         </Box>
@@ -376,12 +388,14 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
         {activeTask ? (
           <>
             <Text bold>
-              #{activeTask.id}  {activeTask.title}
+              #{activeTask.id} {activeTask.title}
             </Text>
             <Box>
               <Text color={THEME.status[activeTask.status]}>{activeTask.status}</Text>
-              <Text dimColor>  ·  created {activeTask.created}</Text>
-              {activeTask.epicId !== undefined && <Text dimColor>  ·  epic #{activeTask.epicId}</Text>}
+              <Text dimColor> · created {activeTask.created}</Text>
+              {activeTask.epicId !== undefined && (
+                <Text dimColor> · epic #{activeTask.epicId}</Text>
+              )}
             </Box>
             <Text>{activeTask.description || '—'}</Text>
             {activeTask.resolution && <Text dimColor>resolution — {activeTask.resolution}</Text>}
@@ -392,8 +406,8 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
       </Box>
       <Box marginTop={1}>
         <Text dimColor>
-          ←/→ or 1/2/3 switch list · j/k move · Tab {viewMode === 'list' ? 'board' : 'list'} view · /
-          filter · m move task · r reload · q quit
+          ←/→ or 1/2/3 switch list · j/k move · Tab {viewMode === 'list' ? 'board' : 'list'} view ·
+          / filter · m move task · r reload · q quit
           {status ? `   ${status}` : ''}
         </Text>
       </Box>
