@@ -6,7 +6,7 @@
 import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import React, { useCallback, useEffect, useState } from 'react';
 
-import { findTasks, moveTask } from '../operations.js';
+import { findTasks, moveTask, updateTask } from '../operations.js';
 import type { BacklogDocument, Task, TaskStatus } from '../model.js';
 import { SECTIONS } from '../model.js';
 import type { BacklogStore } from '../store.js';
@@ -92,6 +92,8 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
   const [filterMode, setFilterMode] = useState(false);
   const [moveMode, setMoveMode] = useState(false);
   const [moveCursor, setMoveCursor] = useState(0);
+  const [editMode, setEditMode] = useState(false);
+  const [editDraft, setEditDraft] = useState('');
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState<string>('');
 
@@ -135,7 +137,42 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
     [activeTask, store, reload],
   );
 
+  const saveEdit = useCallback(() => {
+    if (!activeTask) return;
+    const id = activeTask.id;
+    const value = editDraft;
+    setEditMode(false);
+    store
+      .mutate((d) => updateTask(d, { id, field: 'description', value }))
+      .then(() => {
+        setStatus(`#${id} description updated`);
+        reload();
+      })
+      .catch((err: unknown) => setError(String(err)));
+  }, [activeTask, editDraft, store, reload]);
+
   useInput((input, key) => {
+    if (editMode) {
+      if (key.escape) {
+        setEditMode(false);
+        return;
+      }
+      if (input === 's' && key.ctrl) {
+        saveEdit();
+        return;
+      }
+      if (key.return) {
+        setEditDraft((d) => `${d}\n`);
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setEditDraft((d) => d.slice(0, -1));
+        return;
+      }
+      if (input) setEditDraft((d) => d + input);
+      return;
+    }
+
     if (moveMode) {
       if (key.escape) {
         setMoveMode(false);
@@ -235,6 +272,11 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
       setMoveMode(true);
       return;
     }
+    if (input === 'e' && activeTask) {
+      setEditDraft(activeTask.description);
+      setEditMode(true);
+      return;
+    }
   });
 
   if (error) {
@@ -247,6 +289,57 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
 
   if (!doc) {
     return <Text>Loading {backlogPath}...</Text>;
+  }
+
+  // Full-screen mode, same idea as swapping list<->board: editing a
+  // description needs room to grow, so it claims the whole frame instead of
+  // squeezing into the fixed-height detail pane.
+  if (editMode && activeTask) {
+    const editorHeight = Math.max((stdout.rows || 24) - 6, 3);
+    return (
+      <Box key="edit-screen" flexDirection="column" width={stdout.columns} height={stdout.rows}>
+        <Box width={stdout.columns} justifyContent="space-between">
+          <Box>
+            <Text color={THEME.accent}>▍</Text>
+            <Text bold> Editing #{activeTask.id} </Text>
+            <Text dimColor>{activeTask.title}</Text>
+          </Box>
+          <Box>
+            <Text color={THEME.status[activeTask.status]}>
+              {STATUS_PIP} {activeTask.status}
+            </Text>
+          </Box>
+        </Box>
+        <Box
+          width={stdout.columns}
+          borderStyle="single"
+          borderTop={false}
+          borderLeft={false}
+          borderRight={false}
+          borderBottomColor={THEME.rule}
+          borderBottomDimColor
+        />
+        <Box
+          marginTop={1}
+          flexDirection="column"
+          height={editorHeight}
+          borderStyle="single"
+          borderColor={THEME.accent}
+          paddingX={1}
+        >
+          <Text>
+            {editDraft}
+            <Text color={THEME.accent}>▏</Text>
+          </Text>
+        </Box>
+        <Box marginTop={1}>
+          <Text color={THEME.accent}>ctrl+s</Text>
+          <Text dimColor> save · </Text>
+          <Text color={THEME.accent}>esc</Text>
+          <Text dimColor> discard</Text>
+        </Box>
+      </Box>
+    );
   }
 
   /** One board card. The focused column reuses the live-scrolling `visible` window; the other two just clip to what fits, since they have no selection to follow. */
@@ -304,12 +397,13 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
     ['tab', viewMode === 'list' ? 'board view' : 'list view'],
     ['/', 'filter'],
     ['m', 'move task'],
+    ['e', 'edit description'],
     ['r', 'reload'],
     ['q', 'quit'],
   ];
 
   return (
-    <Box flexDirection="column" width={stdout.columns} height={stdout.rows}>
+    <Box key="main-screen" flexDirection="column" width={stdout.columns} height={stdout.rows}>
       <Box width={stdout.columns} justifyContent="space-between">
         <Box>
           <Text color={THEME.accent}>▍</Text>
