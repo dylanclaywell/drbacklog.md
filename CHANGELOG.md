@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/dylanclaywell/drbacklog.md/compare/drbacklog-v0.3.0...drbacklog-v0.4.0) (2026-09-03)
+
+
+### Features
+
+* remember which file holds the backlog per project ([71d3267](https://github.com/dylanclaywell/drbacklog.md/commit/71d32674c949133ca366e85744d3d8ad6b8388e3))
+
 ## [0.3.0](https://github.com/dylanclaywell/drbacklog.md/compare/drbacklog-v0.2.0...drbacklog-v0.3.0) (2026-09-03)
 
 
