@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.3.0](https://github.com/dylanclaywell/drbacklog.md/compare/drbacklog-v0.2.0...drbacklog-v0.3.0) (2026-09-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* backlog.md files written by pre-rename versions use headings and field names this version no longer parses by default. Pass migrate: true on any tool call against such a file to upgrade it in place (see README's "Migrating an old backlog.md").
+
+### Features
+
+* add find_tasks fuzzy search tool ([66c1def](https://github.com/dylanclaywell/drbacklog.md/commit/66c1defedf9040e33e126403a366283fe3b1327f))
+* add optional epics for grouping tasks ([71058f3](https://github.com/dylanclaywell/drbacklog.md/commit/71058f33537d7fbf29fa8a9ef7a23690424a1a60))
+* added visual interest to the lists ([ba90137](https://github.com/dylanclaywell/drbacklog.md/commit/ba90137a34dc888be82e0051f43b9beae184db41))
+* arrow-key cursor navigation in the description editor ([fc99ef2](https://github.com/dylanclaywell/drbacklog.md/commit/fc99ef2904f92bca467024e4cc1d49158ba4df61))
+* editable task descriptions in the TUI ([99bb1a5](https://github.com/dylanclaywell/drbacklog.md/commit/99bb1a5c47bdb0d700cf77a9b9eff97c4a42affe))
+* home/end/page up/down in the description editor ([7e1ea05](https://github.com/dylanclaywell/drbacklog.md/commit/7e1ea056f2a21028dd252167da1e621e60ffab6b))
+* refine TUI visual design with recurring status motif ([c11fe79](https://github.com/dylanclaywell/drbacklog.md/commit/c11fe7937e9d7ca8748d9840b31ab9124a514f89))
+
+
+### Bug Fixes
+
+* correct fuzzy scorer's anchor and boundary bias ([ce1c5f6](https://github.com/dylanclaywell/drbacklog.md/commit/ce1c5f626913c8a2e3d39d46aa412254570457cb))
+* description/title edits silently truncating on reload ([b7bfcbb](https://github.com/dylanclaywell/drbacklog.md/commit/b7bfcbbfba0b683ac70007da2b41d43f5b6a0b30))
+* overlay the description-editor cursor instead of inserting it ([b53d9ce](https://github.com/dylanclaywell/drbacklog.md/commit/b53d9ce3a8519d071f913df9cda22a5d13473084))
+* ran prettier ([50e3ccd](https://github.com/dylanclaywell/drbacklog.md/commit/50e3ccd176c27b6ee9461d50a68101f77a1d0feb))
+
+
+### Refactors
+
+* drop hospital theme from headings, fields, and messages ([92c8a29](https://github.com/dylanclaywell/drbacklog.md/commit/92c8a29141ec7e66b9106b6d89b6503c2eda7c5e))
+
 ## [0.2.0](https://github.com/dylanclaywell/drbacklog.md/compare/drbacklog-v0.1.0...drbacklog-v0.2.0) (2026-07-17)
 
 
