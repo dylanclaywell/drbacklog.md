@@ -3,7 +3,7 @@
 // through the same `operations.ts` functions the MCP tools call — so TUI
 // behavior never diverges from tool behavior.
 
-import { Box, Text, useApp, useInput, useStdout } from 'ink';
+import { Box, Text, useApp, useInput, useStdin, useStdout } from 'ink';
 import React, { useCallback, useEffect, useState } from 'react';
 
 import { findTasks, moveTask, updateTask } from '../operations.js';
@@ -79,6 +79,29 @@ function moveCursorVertical(text: string, cursor: number, direction: -1 | 1): nu
   return nextLineStart + Math.min(col, nextLineLen);
 }
 
+/** Repeat moveCursorVertical `lines` times (sign gives direction) — used by page up/down. */
+function moveCursorByLines(text: string, cursor: number, lines: number): number {
+  const direction = lines < 0 ? -1 : 1;
+  let pos = cursor;
+  for (let i = 0; i < Math.abs(lines); i++) {
+    const next = moveCursorVertical(text, pos, direction);
+    if (next === pos) break; // hit the first/last line, nothing more to do
+    pos = next;
+  }
+  return pos;
+}
+
+// Ink's `useInput` recognizes arrow keys, page up/down, escape, etc. as
+// `key.*` booleans, but not Home/End — those keys parse to a name it never
+// exposes, so `key` and `input` both come back empty for them. The escape
+// sequences below are matched against Ink's raw input chunks instead (see
+// the effect below). Every listed variant is a real terminal's encoding of
+// Home/End (xterm/vt220 numbered forms included), not a guess — this is
+// the same table Ink's own parser uses internally, just without a public
+// way to ask it "was that Home?".
+const HOME_SEQUENCES = new Set(['[H', 'OH', '[1~', '[7~', '[7$', '[7^']);
+const END_SEQUENCES = new Set(['[F', 'OF', '[4~', '[8~', '[8$', '[8^']);
+
 function tasksForTab(doc: BacklogDocument, tab: TaskStatus, query: string): Task[] {
   if (query.trim().length === 0) {
     return doc.tasks.filter((t) => t.status === tab);
@@ -108,6 +131,12 @@ const BASE_CHROME_HEIGHT =
 export function App({ store, backlogPath }: AppProps): React.ReactElement {
   const { exit } = useApp();
   const { stdout } = useStdout();
+  const { internal_eventEmitter: internalEventEmitter } = useStdin();
+  // Height of the full-screen description editor's bordered box (see the
+  // editMode render branch below) — computed here too so page up/down in
+  // the input handler can size a "page" the same way the box is sized.
+  const editorHeight = Math.max((stdout.rows || 24) - 6, 3);
+  const editorContentRows = Math.max(editorHeight - 2, 1); // minus top/bottom border
   const [doc, setDoc] = useState<BacklogDocument | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<TaskStatus>('TODO');
@@ -200,6 +229,14 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
       }
       if (key.downArrow) {
         setEditCursor((c) => moveCursorVertical(editDraft, c, 1));
+        return;
+      }
+      if (key.pageUp) {
+        setEditCursor((c) => moveCursorByLines(editDraft, c, -editorContentRows));
+        return;
+      }
+      if (key.pageDown) {
+        setEditCursor((c) => moveCursorByLines(editDraft, c, editorContentRows));
         return;
       }
       if (key.return) {
@@ -331,6 +368,34 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
     }
   });
 
+  // Home/End land here rather than in useInput above because Ink's `key`
+  // object has no field for them (see HOME_SEQUENCES/END_SEQUENCES) — so
+  // this reads the raw escape sequence off Ink's own internal 'input' event
+  // instead. That's deliberately not `stdin.on('data', ...)`: Ink consumes
+  // stdin itself via `stdin.read()` in paused mode, and attaching a 'data'
+  // listener would flip the stream to flowing mode and silently steal bytes
+  // from Ink's own parsing. `internal_eventEmitter` re-broadcasts the same
+  // raw chunks Ink reads, without touching the stream's mode.
+  useEffect(() => {
+    if (!editMode) return;
+    const onInput = (chunk: string) => {
+      if (!chunk.startsWith('\u001B')) return;
+      const rest = chunk.slice(1);
+      if (HOME_SEQUENCES.has(rest)) {
+        setEditCursor((c) => editDraft.lastIndexOf('\n', c - 1) + 1);
+      } else if (END_SEQUENCES.has(rest)) {
+        setEditCursor((c) => {
+          const lineEnd = editDraft.indexOf('\n', c);
+          return lineEnd === -1 ? editDraft.length : lineEnd;
+        });
+      }
+    };
+    internalEventEmitter?.on('input', onInput);
+    return () => {
+      internalEventEmitter?.off('input', onInput);
+    };
+  }, [editMode, editDraft, internalEventEmitter]);
+
   if (error) {
     return (
       <Box flexDirection="column">
@@ -347,7 +412,6 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
   // description needs room to grow, so it claims the whole frame instead of
   // squeezing into the fixed-height detail pane.
   if (editMode && activeTask) {
-    const editorHeight = Math.max((stdout.rows || 24) - 6, 3);
     // Overlay the cursor on the character already there (like a real
     // terminal cursor) instead of inserting an extra glyph — inserting one
     // shoves the rest of the line sideways as the cursor moves through it.
@@ -397,6 +461,10 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
         <Box marginTop={1}>
           <Text color={THEME.accent}>↑↓←→</Text>
           <Text dimColor> move · </Text>
+          <Text color={THEME.accent}>home/end</Text>
+          <Text dimColor> line · </Text>
+          <Text color={THEME.accent}>pgup/pgdn</Text>
+          <Text dimColor> page · </Text>
           <Text color={THEME.accent}>ctrl+s</Text>
           <Text dimColor> save · </Text>
           <Text color={THEME.accent}>esc</Text>
