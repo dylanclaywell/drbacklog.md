@@ -166,13 +166,29 @@ Add the server to your MCP config (e.g. a project-scoped `.mcp.json`).
 
 The file path is resolved in this order:
 
-1. **`DRBACKLOG_FILE`** environment variable — an explicit path (absolute, or
-   relative to the working directory). Set it in the server's `env` block in
-   `.mcp.json` (shown below) to pin one shared file.
-2. **`CLAUDE_PROJECT_DIR`/backlog.md** — Claude Code sets `CLAUDE_PROJECT_DIR`
+1. **`--file <path>`** on the command line — an explicit override for one run
+   (absolute, or relative to the working directory). Works on both `drbacklog`
+   and `drbacklog-tui`.
+2. **`DRBACKLOG_FILE`** environment variable — the same idea, for the life of
+   the process. Set it in the server's `env` block in `.mcp.json` (shown below).
+3. **`.drbacklog.json`** — the nearest project config, found by walking up from
+   the project directory. Its `file` key resolves relative to the config file
+   itself, so the config stays correct no matter which subdirectory a command
+   runs in:
+
+   ```json
+   { "file": "docs/backlog.md" }
+   ```
+
+   Commit it and the MCP server, the TUI, your teammates, and CI all agree on
+   one backlog with nothing to configure per machine. The TUI offers to write
+   this file for you the first time it can't find a backlog. Unknown keys are
+   ignored and preserved on write; a malformed config falls through to the
+   defaults rather than failing.
+4. **`CLAUDE_PROJECT_DIR`/backlog.md** — Claude Code sets `CLAUDE_PROJECT_DIR`
    to the project root, so with no configuration each project automatically
    gets its own `backlog.md` — even from a single user-scoped server entry.
-3. **`./backlog.md`** in the current working directory — final fallback.
+5. **`./backlog.md`** in the current working directory — final fallback.
 
 To pin one shared file, add an `env` block to the server entry:
 

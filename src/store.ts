@@ -8,6 +8,7 @@ import { access, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/prom
 import { basename, dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
+import { resolveConfiguredPath } from './config.js';
 import { parse } from './parse.js';
 import { render } from './render.js';
 import { isLegacyFormat, migrateContent } from './migrate.js';
@@ -49,17 +50,27 @@ export function createEmptyDocument(): BacklogDocument {
 
 /**
  * Resolve the backlog file path. Precedence:
- *   1. DRBACKLOG_FILE  — explicit override (absolute, or relative to cwd)
- *   2. CLAUDE_PROJECT_DIR/backlog.md — per-project default when Claude Code
+ *   1. --file <path>   — explicit override for this run (relative to cwd)
+ *   2. DRBACKLOG_FILE  — explicit override (absolute, or relative to cwd)
+ *   3. .drbacklog.json — nearest project config walking up from the project
+ *      dir (see config.ts); its `file` is relative to the config file itself
+ *   4. CLAUDE_PROJECT_DIR/backlog.md — per-project default when Claude Code
  *      spawns the server (cwd is not a reliable project root; this env var is)
- *   3. cwd/backlog.md  — last-resort fallback
+ *   5. cwd/backlog.md  — last-resort fallback
  */
 export function resolveBacklogPath(
   cwd: string = process.cwd(),
   env: NodeJS.ProcessEnv = process.env,
+  cliFile?: string,
 ): string {
+  if (cliFile) return resolve(cwd, cliFile);
   if (env.DRBACKLOG_FILE) return resolve(cwd, env.DRBACKLOG_FILE);
-  return resolve(env.CLAUDE_PROJECT_DIR ?? cwd, 'backlog.md');
+
+  const projectDir = env.CLAUDE_PROJECT_DIR ?? cwd;
+  const configured = resolveConfiguredPath(projectDir);
+  if (configured !== null) return configured;
+
+  return resolve(projectDir, 'backlog.md');
 }
 
 function isNotFound(err: unknown): boolean {

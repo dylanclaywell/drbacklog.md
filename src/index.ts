@@ -6,10 +6,15 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { dirname } from 'node:path';
 
 import { BacklogStore, resolveBacklogPath } from './store.js';
+import { parseFileArg } from './cli.js';
 import { createServer } from './server.js';
 
 async function main(): Promise<void> {
-  const backlogPath = resolveBacklogPath();
+  const backlogPath = resolveBacklogPath(
+    process.cwd(),
+    process.env,
+    parseFileArg(process.argv.slice(2)),
+  );
   const store = new BacklogStore(backlogPath);
   await store.ensureInitialized();
 
