@@ -348,6 +348,15 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
   // squeezing into the fixed-height detail pane.
   if (editMode && activeTask) {
     const editorHeight = Math.max((stdout.rows || 24) - 6, 3);
+    // Overlay the cursor on the character already there (like a real
+    // terminal cursor) instead of inserting an extra glyph — inserting one
+    // shoves the rest of the line sideways as the cursor moves through it.
+    // At end-of-text or right before a newline there's no character to
+    // stand on, so a blank cell (width 0 consumed from the string) fills in.
+    const atCursor = editDraft[editCursor];
+    const cursorStandsOnCharacter = atCursor !== undefined && atCursor !== '\n';
+    const cursorGlyph = cursorStandsOnCharacter ? atCursor : ' ';
+    const cursorGlyphWidth = cursorStandsOnCharacter ? 1 : 0;
     return (
       <Box key="edit-screen" flexDirection="column" width={stdout.columns} height={stdout.rows}>
         <Box width={stdout.columns} justifyContent="space-between">
@@ -381,8 +390,8 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
         >
           <Text>
             {editDraft.slice(0, editCursor)}
-            <Text color={THEME.accent}>▏</Text>
-            {editDraft.slice(editCursor)}
+            <Text inverse>{cursorGlyph}</Text>
+            {editDraft.slice(editCursor + cursorGlyphWidth)}
           </Text>
         </Box>
         <Box marginTop={1}>
