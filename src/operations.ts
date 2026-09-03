@@ -37,6 +37,32 @@ function findEpicOrThrow(doc: BacklogDocument, id: number): Epic {
   return epic;
 }
 
+// The file format can't round-trip either of these losslessly, so values are
+// normalized on the way in rather than silently mangled on the next parse:
+//
+// - A blank line inside a multi-line field (description/resolution) reads
+//   back as the field ending there — parse.ts treats any blank line as the
+//   field's terminator by design, so anything after it becomes passthrough
+//   `extraLines` instead of part of the field. The value looks unchanged
+//   right after saving, then appears to have reverted (with no error) on
+//   the very next load, including a fresh app restart. Collapsing blank
+//   lines up front means there's never a boundary for the parser to stop at.
+// - A newline inside a title breaks the `### #N: <title>` heading it's
+//   rendered into, corrupting the file structure outright.
+
+/** Drop every blank (or whitespace-only) line, since none of them survive a parse. */
+function collapseBlankLines(value: string): string {
+  return value
+    .split('\n')
+    .filter((line) => line.trim() !== '')
+    .join('\n');
+}
+
+/** Titles render onto a single heading line; a literal newline there isn't representable. */
+function sanitizeTitle(value: string): string {
+  return value.replace(/\s*\n\s*/g, ' ').trim();
+}
+
 /** The next task id: one past the highest existing id (1 for an empty backlog). */
 export function nextId(doc: BacklogDocument): number {
   return doc.tasks.reduce((max, task) => Math.max(max, task.id), 0) + 1;
@@ -53,8 +79,8 @@ export interface AddTaskInput {
 export function addTask(doc: BacklogDocument, input: AddTaskInput): Task {
   const task: Task = {
     id: nextId(doc),
-    title: input.title,
-    description: input.description,
+    title: sanitizeTitle(input.title),
+    description: collapseBlankLines(input.description),
     status: 'TODO',
     created: input.created,
     extraLines: [],
@@ -75,7 +101,7 @@ export function moveTask(doc: BacklogDocument, input: MoveTaskInput): Task {
   const task = findTaskOrThrow(doc, input.id);
   task.status = input.status;
   if ((input.status === 'DONE' || input.status === 'CLOSED') && input.resolution !== undefined) {
-    task.resolution = input.resolution;
+    task.resolution = collapseBlankLines(input.resolution);
   }
   return task;
 }
@@ -94,13 +120,13 @@ export function updateTask(doc: BacklogDocument, input: UpdateTaskInput): Task {
   const task = findTaskOrThrow(doc, input.id);
   switch (input.field) {
     case 'title':
-      task.title = input.value;
+      task.title = sanitizeTitle(input.value);
       break;
     case 'description':
-      task.description = input.value;
+      task.description = collapseBlankLines(input.value);
       break;
     case 'resolution':
-      task.resolution = input.value;
+      task.resolution = collapseBlankLines(input.value);
       break;
   }
   return task;
@@ -232,8 +258,8 @@ export interface AddEpicInput {
 export function addEpic(doc: BacklogDocument, input: AddEpicInput): Epic {
   const epic: Epic = {
     id: nextEpicId(doc),
-    title: input.title,
-    description: input.description,
+    title: sanitizeTitle(input.title),
+    description: collapseBlankLines(input.description),
     extraLines: [],
   };
   doc.epics.push(epic);
@@ -249,7 +275,8 @@ export interface UpdateEpicInput {
 /** Update a single text field on an epic. */
 export function updateEpic(doc: BacklogDocument, input: UpdateEpicInput): Epic {
   const epic = findEpicOrThrow(doc, input.id);
-  epic[input.field] = input.value;
+  epic[input.field] =
+    input.field === 'title' ? sanitizeTitle(input.value) : collapseBlankLines(input.value);
   return epic;
 }
 

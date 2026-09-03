@@ -70,6 +70,31 @@ describe('addTask', () => {
     const second = addTask(doc, { title: 'b', description: '', created: '2026-07-17' });
     expect([first.id, second.id]).toEqual([1, 2]);
   });
+
+  it('collapses blank lines out of the description', () => {
+    // A blank line inside a multi-line field reads back as the field ending
+    // there (see parse.ts), so anything after it would silently fall out of
+    // `description` on the very next load — collapse it up front instead.
+    const doc = createEmptyDocument();
+    const task = addTask(doc, {
+      title: 'a',
+      description: 'First paragraph.\n\nSecond paragraph.',
+      created: '2026-07-17',
+    });
+    expect(task.description).toBe('First paragraph.\nSecond paragraph.');
+  });
+
+  it('strips newlines out of the title', () => {
+    // A literal newline in a title breaks the `### #N: <title>` heading it
+    // renders into.
+    const doc = createEmptyDocument();
+    const task = addTask(doc, {
+      title: 'Line one\nLine two',
+      description: '',
+      created: '2026-07-17',
+    });
+    expect(task.title).toBe('Line one Line two');
+  });
 });
 
 describe('moveTask', () => {
@@ -105,6 +130,16 @@ describe('moveTask', () => {
     const doc = createEmptyDocument();
     expect(() => moveTask(doc, { id: 999, status: 'DONE' })).toThrow(TaskNotFoundError);
   });
+
+  it('collapses blank lines out of a resolution', () => {
+    const { doc, id } = docWithTask();
+    const task = moveTask(doc, {
+      id,
+      status: 'DONE',
+      resolution: 'Fixed the bug.\n\nVerified in prod.',
+    });
+    expect(task.resolution).toBe('Fixed the bug.\nVerified in prod.');
+  });
 });
 
 describe('updateTask', () => {
@@ -126,6 +161,28 @@ describe('updateTask', () => {
     const { doc, id } = docWithTask();
     const task = updateTask(doc, { id, field: 'resolution', value: 'Fixed it.' });
     expect(task.resolution).toBe('Fixed it.');
+  });
+
+  it('collapses blank lines out of a multi-line description', () => {
+    // Regression test: editing a description in the TUI to add a second
+    // paragraph (pressing Enter twice) used to save fine but then read back
+    // truncated at the blank line on the very next load — including a full
+    // app restart — because parse.ts treats a blank line as the field's end
+    // and files the rest under `extraLines` instead. See addTask's matching
+    // test for where this is actually enforced.
+    const { doc, id } = docWithTask();
+    const task = updateTask(doc, {
+      id,
+      field: 'description',
+      value: 'First paragraph.\n\nSecond paragraph.',
+    });
+    expect(task.description).toBe('First paragraph.\nSecond paragraph.');
+  });
+
+  it('strips newlines out of an updated title', () => {
+    const { doc, id } = docWithTask();
+    const task = updateTask(doc, { id, field: 'title', value: 'Line one\nLine two' });
+    expect(task.title).toBe('Line one Line two');
   });
 
   it('throws TaskNotFoundError for an unknown id', () => {
