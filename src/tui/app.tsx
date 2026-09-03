@@ -55,6 +55,30 @@ const STATUS_BY_DIGIT: Readonly<Record<string, TaskStatus>> = {
   '3': 'CLOSED',
 };
 
+/**
+ * Move a cursor index up or down one explicit line within a multi-line
+ * string, preserving column where possible (clamped to the target line's
+ * length) — the same "sticky column" behavior most editors use. Only
+ * explicit '\n's count as lines; Ink gives no way to know where a long line
+ * soft-wraps on screen, so up/down can't follow visual wrapping.
+ */
+function moveCursorVertical(text: string, cursor: number, direction: -1 | 1): number {
+  const lineStart = text.lastIndexOf('\n', cursor - 1) + 1;
+  const col = cursor - lineStart;
+  if (direction < 0) {
+    if (lineStart === 0) return cursor; // already on the first line
+    const prevLineStart = text.lastIndexOf('\n', lineStart - 2) + 1;
+    const prevLineEnd = lineStart - 1;
+    return prevLineStart + Math.min(col, prevLineEnd - prevLineStart);
+  }
+  const lineEnd = text.indexOf('\n', cursor);
+  if (lineEnd === -1) return cursor; // already on the last line
+  const nextLineStart = lineEnd + 1;
+  const nextLineEnd = text.indexOf('\n', nextLineStart);
+  const nextLineLen = (nextLineEnd === -1 ? text.length : nextLineEnd) - nextLineStart;
+  return nextLineStart + Math.min(col, nextLineLen);
+}
+
 function tasksForTab(doc: BacklogDocument, tab: TaskStatus, query: string): Task[] {
   if (query.trim().length === 0) {
     return doc.tasks.filter((t) => t.status === tab);
@@ -94,6 +118,7 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
   const [moveCursor, setMoveCursor] = useState(0);
   const [editMode, setEditMode] = useState(false);
   const [editDraft, setEditDraft] = useState('');
+  const [editCursor, setEditCursor] = useState(0);
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState<string>('');
 
@@ -161,15 +186,41 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
         saveEdit();
         return;
       }
+      if (key.leftArrow) {
+        setEditCursor((c) => Math.max(0, c - 1));
+        return;
+      }
+      if (key.rightArrow) {
+        setEditCursor((c) => Math.min(editDraft.length, c + 1));
+        return;
+      }
+      if (key.upArrow) {
+        setEditCursor((c) => moveCursorVertical(editDraft, c, -1));
+        return;
+      }
+      if (key.downArrow) {
+        setEditCursor((c) => moveCursorVertical(editDraft, c, 1));
+        return;
+      }
       if (key.return) {
-        setEditDraft((d) => `${d}\n`);
+        setEditDraft((d) => d.slice(0, editCursor) + '\n' + d.slice(editCursor));
+        setEditCursor((c) => c + 1);
         return;
       }
+      // Both the Backspace and Delete keys arrive here as `key.delete`
+      // (never `key.backspace`) in every terminal we've observed — there is
+      // no reliable way to tell them apart, so both delete backward from
+      // the cursor, matching Backspace.
       if (key.backspace || key.delete) {
-        setEditDraft((d) => d.slice(0, -1));
+        if (editCursor === 0) return;
+        setEditDraft((d) => d.slice(0, editCursor - 1) + d.slice(editCursor));
+        setEditCursor((c) => c - 1);
         return;
       }
-      if (input) setEditDraft((d) => d + input);
+      if (input) {
+        setEditDraft((d) => d.slice(0, editCursor) + input + d.slice(editCursor));
+        setEditCursor((c) => c + input.length);
+      }
       return;
     }
 
@@ -274,6 +325,7 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
     }
     if (input === 'e' && activeTask) {
       setEditDraft(activeTask.description);
+      setEditCursor(activeTask.description.length);
       setEditMode(true);
       return;
     }
@@ -328,11 +380,14 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
           paddingX={1}
         >
           <Text>
-            {editDraft}
+            {editDraft.slice(0, editCursor)}
             <Text color={THEME.accent}>▏</Text>
+            {editDraft.slice(editCursor)}
           </Text>
         </Box>
         <Box marginTop={1}>
+          <Text color={THEME.accent}>↑↓←→</Text>
+          <Text dimColor> move · </Text>
           <Text color={THEME.accent}>ctrl+s</Text>
           <Text dimColor> save · </Text>
           <Text color={THEME.accent}>esc</Text>
