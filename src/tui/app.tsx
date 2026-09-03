@@ -36,6 +36,15 @@ const THEME = {
   } satisfies Record<TaskStatus, string>,
 } as const;
 
+/**
+ * One glyph, reused everywhere a status needs to be recognized by shape as
+ * well as by hue: the tab bar, board card headers, the detail pane, and the
+ * always-on count strip in the header. Consistent repetition is the point —
+ * it's the one recurring motif that makes the palette read as a system
+ * rather than decoration.
+ */
+const STATUS_PIP = '●';
+
 /** Rows a board card's header + underline rule eat out of its assigned height. */
 const CARD_CHROME_ROWS = 2;
 
@@ -56,7 +65,7 @@ function tasksForTab(doc: BacklogDocument, tab: TaskStatus, query: string): Task
 // Fixed-height chrome around the scrolling list — every other row on screen
 // — used to work out how many rows are left over for the list itself.
 const DETAIL_PANE_HEIGHT = 6;
-const TITLE_ROWS = 1 + 1; // title line + hairline rule beneath it
+const TITLE_ROWS = 1 + 1 + 1; // wordmark+counts line, path line, hairline rule
 // The status tab bar only appears in list mode — board mode already shows
 // focus per-card, so the bar would be a redundant extra row there.
 const TAB_BAR_ROWS = 1 + 1; // margin above + content
@@ -263,6 +272,7 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
           borderBottomColor={focused ? THEME.accent : THEME.rule}
           borderBottomDimColor={!focused}
         >
+          <Text color={THEME.status[s]}>{STATUS_PIP} </Text>
           <Text bold underline={focused} color={THEME.status[s]}>
             {s}
           </Text>
@@ -273,7 +283,7 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
           const isSelected = focused && start + i === selected;
           return (
             <Box key={task.id}>
-              <Text color={isSelected ? THEME.accent : undefined}>{isSelected ? '❯ ' : '  '}</Text>
+              <Text color={isSelected ? THEME.accent : undefined}>{isSelected ? '▏ ' : '  '}</Text>
               <Text dimColor={!isSelected}>#{task.id} </Text>
               <Text bold={isSelected} color={isSelected ? THEME.accent : undefined}>
                 {task.title}
@@ -288,13 +298,34 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
     );
   }
 
+  const shortcuts: ReadonlyArray<readonly [string, string]> = [
+    ['←/→ 1/2/3', 'switch list'],
+    ['j/k', 'move'],
+    ['tab', viewMode === 'list' ? 'board view' : 'list view'],
+    ['/', 'filter'],
+    ['m', 'move task'],
+    ['r', 'reload'],
+    ['q', 'quit'],
+  ];
+
   return (
     <Box flexDirection="column" width={stdout.columns} height={stdout.rows}>
+      <Box width={stdout.columns} justifyContent="space-between">
+        <Box>
+          <Text color={THEME.accent}>▍</Text>
+          <Text bold> DrBacklog</Text>
+        </Box>
+        <Box>
+          {STATUS_ORDER.map((s, i) => (
+            <Box key={s} marginLeft={i === 0 ? 0 : 2}>
+              <Text color={THEME.status[s]}>{STATUS_PIP} </Text>
+              <Text dimColor>{doc.tasks.filter((t) => t.status === s).length}</Text>
+            </Box>
+          ))}
+        </Box>
+      </Box>
       <Box>
-        <Text bold color={THEME.accent}>
-          DrBacklog
-        </Text>
-        <Text dimColor> {backlogPath}</Text>
+        <Text dimColor>{backlogPath}</Text>
       </Box>
       <Box
         width={stdout.columns}
@@ -309,10 +340,10 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
         <Box marginTop={1}>
           {STATUS_ORDER.map((s, i) => (
             <Box key={s} marginRight={i < STATUS_ORDER.length - 1 ? 3 : 0}>
+              <Text color={THEME.status[s]}>{STATUS_PIP} </Text>
               <Text bold={s === tab} underline={s === tab} color={THEME.status[s]}>
                 {s}
               </Text>
-              <Text dimColor> ({doc.tasks.filter((t) => t.status === s).length})</Text>
             </Box>
           ))}
         </Box>
@@ -351,13 +382,17 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
         </Box>
       ) : (
         <Box marginTop={1} flexDirection="column" flexGrow={1} height={listHeight}>
-          {list.length === 0 && <Text dimColor>No tasks.</Text>}
+          {list.length === 0 && (
+            <Text dimColor>
+              {query.trim() ? `No matches for “${query}”.` : `Nothing in ${tab.toLowerCase()} yet.`}
+            </Text>
+          )}
           {visible.map((task, i) => {
             const isSelected = visibleStart + i === selected;
             return (
               <Box key={task.id}>
                 <Text color={isSelected ? THEME.accent : undefined}>
-                  {isSelected ? '❯ ' : '  '}
+                  {isSelected ? '▏ ' : '  '}
                 </Text>
                 <Text dimColor={!isSelected}>#{task.id} </Text>
                 <Text bold={isSelected} color={isSelected ? THEME.accent : undefined}>
@@ -391,25 +426,34 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
               #{activeTask.id} {activeTask.title}
             </Text>
             <Box>
-              <Text color={THEME.status[activeTask.status]}>{activeTask.status}</Text>
+              <Text color={THEME.status[activeTask.status]}>
+                {STATUS_PIP} {activeTask.status}
+              </Text>
               <Text dimColor> · created {activeTask.created}</Text>
               {activeTask.epicId !== undefined && (
                 <Text dimColor> · epic #{activeTask.epicId}</Text>
               )}
             </Box>
             <Text>{activeTask.description || '—'}</Text>
-            {activeTask.resolution && <Text dimColor>resolution — {activeTask.resolution}</Text>}
+            {activeTask.resolution && <Text dimColor>Resolution: {activeTask.resolution}</Text>}
           </>
         ) : (
           <Text dimColor>Nothing selected</Text>
         )}
       </Box>
-      <Box marginTop={1}>
-        <Text dimColor>
-          ←/→ or 1/2/3 switch list · j/k move · Tab {viewMode === 'list' ? 'board' : 'list'} view ·
-          / filter · m move task · r reload · q quit
-          {status ? `   ${status}` : ''}
-        </Text>
+      <Box marginTop={1} flexWrap="wrap">
+        {shortcuts.map(([key, label]) => (
+          <Box key={key} marginRight={2}>
+            <Text color={THEME.accent}>{key}</Text>
+            <Text dimColor> {label}</Text>
+          </Box>
+        ))}
+        {status && (
+          <Box>
+            <Text color={THEME.accent}>▏ </Text>
+            <Text dimColor>{status}</Text>
+          </Box>
+        )}
       </Box>
     </Box>
   );
