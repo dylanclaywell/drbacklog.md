@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -8,6 +8,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 import { BacklogStore } from './store.js';
 import { createServer } from './server.js';
+import { resolveBacklogLocation } from './discover.js';
 
 interface TextResult {
   content: { type: string; text: string }[];
@@ -42,7 +43,7 @@ describe('MCP server', () => {
     return (await client.callTool({ name, arguments: args })) as TextResult;
   }
 
-  it('exposes all fifteen tools', async () => {
+  it('exposes all seventeen tools', async () => {
     const names = (await client.listTools()).tools.map((t) => t.name).sort();
     expect(names).toEqual(
       [
@@ -61,6 +62,8 @@ describe('MCP server', () => {
         'get_epic',
         'list_epics',
         'get_epic_tasks',
+        'list_backlog_files',
+        'set_backlog_file',
       ].sort(),
     );
   });
@@ -249,5 +252,94 @@ describe('MCP server', () => {
       const detail = resultText(await call('get_task', { id: 1 }));
       expect(detail).toContain('Status: DONE');
     });
+  });
+});
+
+describe('MCP server with ambiguous backlogs', () => {
+  let dir: string;
+  let client: Client;
+  const BACKLOG = (title: string) =>
+    `# ${title}\n\n## TODO\n\n---\n\n## Task Details\n\n<a id="task-1"></a>\n\n### #1: T\n\n- **Status:** TODO\n- **Created:** 2026-01-01\n- **Description:** d\n`;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'drbacklog-amb-'));
+    await mkdir(join(dir, 'docs'));
+    await writeFile(join(dir, 'backlog.md'), BACKLOG('A'));
+    await writeFile(join(dir, 'docs', 'backlog.md'), BACKLOG('B'));
+    const location = resolveBacklogLocation(dir, {});
+    const store = new BacklogStore(location.path);
+    const server = createServer(store, { location });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    client = new Client({ name: 'test-client', version: '0.0.0' });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+  });
+
+  afterEach(async () => {
+    await client.close();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function call(name: string, args?: Record<string, unknown>): Promise<TextResult> {
+    return (await client.callTool({ name, arguments: args })) as TextResult;
+  }
+
+  it('refuses tools and lists the candidates instead of guessing', async () => {
+    const result = await call('get_backlog_summary', {});
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain('set_backlog_file');
+    expect(resultText(result)).toContain(join('docs', 'backlog.md'));
+  });
+
+  it('set_backlog_file writes the config, switches, and unblocks the tools', async () => {
+    const set = await call('set_backlog_file', { file: 'docs/backlog.md' });
+    expect(set.isError).toBeUndefined();
+    expect(JSON.parse(await readFile(join(dir, '.drbacklog.json'), 'utf8'))).toEqual({
+      file: 'docs/backlog.md',
+    });
+    expect(resultText(await call('get_task', { id: 1 }))).toContain('Title: T');
+  });
+
+  it('set_backlog_file rejects a missing file unless create is true', async () => {
+    expect((await call('set_backlog_file', { file: 'nope.md' })).isError).toBe(true);
+    expect(
+      (await call('set_backlog_file', { file: 'nope.md', create: true })).isError,
+    ).toBeUndefined();
+  });
+});
+
+describe('MCP server with a missing backlog', () => {
+  let dir: string;
+  let client: Client;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'drbacklog-miss-'));
+    const location = resolveBacklogLocation(dir, {});
+    const server = createServer(new BacklogStore(location.path), { location });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    client = new Client({ name: 'test-client', version: '0.0.0' });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+  });
+
+  afterEach(async () => {
+    await client.close();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function call(name: string, args: Record<string, unknown> = {}): Promise<TextResult> {
+    return (await client.callTool({ name, arguments: args })) as TextResult;
+  }
+
+  it('does not create the file on a miss; it asks the user first', async () => {
+    const result = await call('add_task', { title: 'X', description: 'y' });
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain('create: true');
+    await expect(readFile(join(dir, 'backlog.md'), 'utf8')).rejects.toThrow();
+  });
+
+  it('set_backlog_file with create: true creates it and unblocks the tools', async () => {
+    await call('set_backlog_file', { file: 'backlog.md', create: true });
+    expect(resultText(await call('add_task', { title: 'X', description: 'y' }))).toContain(
+      'Created task #1',
+    );
   });
 });

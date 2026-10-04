@@ -190,6 +190,20 @@ The file path is resolved in this order:
    gets its own `backlog.md` — even from a single user-scoped server entry.
 5. **`./backlog.md`** in the current working directory — final fallback.
 
+### Missing or multiple backlogs
+
+The server never creates a backlog file on its own. When nothing pins a file
+(steps 1–3) it scans the project (two levels deep) for backlog-shaped markdown:
+
+- exactly one found elsewhere (e.g. `docs/backlog.md`) → it is used;
+- several found → every tool refuses to guess and lists them;
+- the resolved file doesn't exist → every tool says so and asks.
+
+The AI recovers with two tools: `list_backlog_files` shows the active and
+candidate files, and `set_backlog_file` records the user's choice in
+`.drbacklog.json` and switches immediately (`create: true`, only after the user
+confirms, starts a new backlog).
+
 To pin one shared file, add an `env` block to the server entry:
 
 ```json

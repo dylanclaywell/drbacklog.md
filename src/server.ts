@@ -7,7 +7,8 @@
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { stat } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 
 import {
   addEpic,
@@ -27,6 +28,8 @@ import {
   updateEpic,
   updateTask,
 } from './operations.js';
+import { writeConfiguredPath } from './config.js';
+import { discoverBacklogFiles, displayPath, type BacklogLocation } from './discover.js';
 import { renderSummary } from './render.js';
 import { LegacyFormatError, type BacklogStore, type LoadOptions } from './store.js';
 import type { Epic, Task } from './model.js';
@@ -45,8 +48,21 @@ const migrateSchema = z
   );
 
 interface CreateServerOptions {
-  /** Directory to write export files into (trusted; filenames are fixed). */
-  exportDir: string;
+  /** Directory to write export files into (trusted; filenames are fixed). Defaults to the backlog's directory. */
+  exportDir?: string;
+  /**
+   * How the backlog file was resolved. When it is `ambiguous`, every backlog
+   * tool refuses to run until `set_backlog_file` picks one.
+   */
+  location?: BacklogLocation;
+}
+
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isFile();
+  } catch {
+    return false;
+  }
 }
 
 function text(body: string) {
@@ -75,7 +91,7 @@ function legacyFormat() {
 }
 
 /** Run a tool body, translating known store/operation errors to a text result. */
-async function guarded(fn: () => Promise<ReturnType<typeof text>>) {
+async function handleErrors(fn: () => Promise<ReturnType<typeof text>>) {
   try {
     return await fn();
   } catch (err) {
@@ -124,6 +140,112 @@ function formatEpicTaskList(epicId: number, tasks: Task[]): string {
 
 export function createServer(store: BacklogStore, options: CreateServerOptions): McpServer {
   const server = new McpServer({ name: 'drbacklog', version: '0.1.0' });
+
+  // Set while several backlogs exist and nothing pins one; cleared by set_backlog_file.
+  let ambiguous = options.location?.ambiguous;
+  const projectDir = (): string => options.location?.projectDir ?? dirname(store.path);
+
+  function chooseFileMessage(candidates: readonly string[]): string {
+    const dir = projectDir();
+    return (
+      'Multiple backlog files were found and none is configured, so DrBacklog will not guess:\n' +
+      candidates.map((c) => `- ${displayPath(dir, c)}`).join('\n') +
+      `\nAsk the user which one is the project's backlog (or whether to create a new one), then ` +
+      `call set_backlog_file with it. That records the choice in .drbacklog.json so every ` +
+      'later session picks the right file automatically.'
+    );
+  }
+
+  function missingFileMessage(): string {
+    const dir = projectDir();
+    const rel = displayPath(dir, store.path);
+    const others = discoverBacklogFiles(dir);
+    return (
+      `No backlog file exists at ${rel}, and DrBacklog will not create one on its own.\n` +
+      (others.length > 0
+        ? `Other backlog files found: ${others.map((c) => displayPath(dir, c)).join(', ')}. ` +
+          'If one of those is the real backlog, confirm with the user and call set_backlog_file with it.\n'
+        : '') +
+      `Ask the user whether to create a new backlog at ${rel}; if they agree, call ` +
+      `set_backlog_file with file: "${rel}" and create: true.`
+    );
+  }
+
+  /** Refuse to touch any file while the target is ambiguous, else run the tool body. */
+  async function guarded(fn: () => Promise<ReturnType<typeof text>>) {
+    if (ambiguous) return errorText(chooseFileMessage(ambiguous));
+    if (!(await fileExists(store.path))) return errorText(missingFileMessage());
+    return handleErrors(fn);
+  }
+
+  server.registerTool(
+    'list_backlog_files',
+    {
+      title: 'List backlog files',
+      description:
+        'Show which backlog file DrBacklog is using and any other backlog files found in the ' +
+        'project. Use this when a tool reports multiple or missing backlogs, or when the tasks ' +
+        'you expected are not there — a different file may hold the real backlog.',
+      inputSchema: {},
+    },
+    () => {
+      const dir = projectDir();
+      const candidates = discoverBacklogFiles(dir);
+      const lines = [
+        ambiguous
+          ? 'Active backlog: none chosen yet (ambiguous).'
+          : `Active backlog: ${displayPath(dir, store.path)}`,
+        candidates.length > 0
+          ? `Backlog files found in the project:\n${candidates.map((c) => `- ${displayPath(dir, c)}`).join('\n')}`
+          : 'No backlog files found in the project.',
+      ];
+      if (candidates.length > 1 || ambiguous) {
+        lines.push('To pick one, confirm with the user and call set_backlog_file.');
+      }
+      return text(lines.join('\n'));
+    },
+  );
+
+  server.registerTool(
+    'set_backlog_file',
+    {
+      title: 'Choose the backlog file',
+      description:
+        "Record which file holds this project's backlog by writing it to .drbacklog.json, and " +
+        'switch to it immediately. Use after list_backlog_files when several backlogs exist, or ' +
+        'when the real backlog is not at backlog.md. The path is relative to the project root. ' +
+        'Only pass create: true to start a brand-new backlog, after the user confirms.',
+      inputSchema: {
+        file: z.string().min(1),
+        create: z.boolean().optional(),
+      },
+    },
+    async ({ file, create }) => {
+      const dir = projectDir();
+      const target = resolve(dir, file);
+      let exists = false;
+      try {
+        const info = await stat(target);
+        if (info.isDirectory()) return errorText(`${file} is a directory — name a backlog file.`);
+        exists = true;
+      } catch {
+        // Missing — only acceptable with create: true.
+      }
+      if (!exists && !create) {
+        return errorText(
+          `${file} does not exist. Run list_backlog_files to see the real backlog files, or ` +
+            'pass create: true (after the user confirms) to start a new one there.',
+        );
+      }
+      await writeConfiguredPath(dir, target);
+      await store.setPath(target);
+      if (!exists) await store.ensureInitialized();
+      ambiguous = undefined;
+      return text(
+        `${exists ? 'Using' : 'Created'} ${displayPath(dir, target)} and saved it to .drbacklog.json.`,
+      );
+    },
+  );
 
   server.registerTool(
     'add_task',
@@ -254,7 +376,7 @@ export function createServer(store: BacklogStore, options: CreateServerOptions):
     async ({ format, migrate }) =>
       guarded(async () => {
         const { filename, content } = exportBacklog(await store.load({ migrate }), format);
-        const outPath = join(options.exportDir, filename);
+        const outPath = join(options.exportDir ?? dirname(store.path), filename);
         await writeFile(outPath, content, 'utf8');
         return text(`Exported to ${format} format. Saved to ${outPath}.`);
       }),

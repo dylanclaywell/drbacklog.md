@@ -48,6 +48,8 @@ export interface SetupChoice {
 export interface SetupPromptProps {
   /** The path the TUI looked for and didn't find; seeds the input. */
   initialPath: string;
+  /** Several existing backlogs were found and none is configured; listed so the user can pick one. */
+  candidates?: readonly string[];
   /** Called with the user's choice when they confirm. */
   onSubmit: (choice: SetupChoice) => void;
   /** Called when the user backs out (esc / ctrl+c). */
@@ -56,6 +58,7 @@ export interface SetupPromptProps {
 
 export function SetupPrompt({
   initialPath,
+  candidates = [],
   onSubmit,
   onCancel,
 }: SetupPromptProps): React.ReactElement {
@@ -171,10 +174,22 @@ export function SetupPrompt({
         <Text color={ACCENT}>▍</Text>
         <Text bold> DrBacklog</Text>
       </Box>
-      <Box marginTop={1}>
-        <Text>No backlog file found at </Text>
-        <Text dimColor>{initialPath}</Text>
-      </Box>
+      {candidates.length > 0 ? (
+        <Box marginTop={1} flexDirection="column">
+          <Text>Multiple backlog files found, and none is configured:</Text>
+          {candidates.map((c) => (
+            <Text key={c} dimColor>
+              {'  '}
+              {c}
+            </Text>
+          ))}
+        </Box>
+      ) : (
+        <Box marginTop={1}>
+          <Text>No backlog file found at </Text>
+          <Text dimColor>{initialPath}</Text>
+        </Box>
+      )}
       <Box>
         <Text dimColor>Enter the backlog file to use:</Text>
       </Box>
@@ -224,11 +239,15 @@ function renderStatus(target: Target): React.ReactElement {
  * backed out. Ink is unmounted before returning so the main app can take over
  * the terminal cleanly.
  */
-export async function promptForBacklogPath(initialPath: string): Promise<SetupChoice | null> {
+export async function promptForBacklogPath(
+  initialPath: string,
+  candidates: readonly string[] = [],
+): Promise<SetupChoice | null> {
   let chosen: SetupChoice | null = null;
   const instance = render(
     React.createElement(SetupPromptExit, {
       initialPath,
+      candidates,
       onChoose: (choice: SetupChoice | null) => {
         chosen = choice;
       },
@@ -242,15 +261,18 @@ export async function promptForBacklogPath(initialPath: string): Promise<SetupCh
 /** Wraps SetupPrompt so choosing (or cancelling) also exits the Ink app. */
 function SetupPromptExit({
   initialPath,
+  candidates,
   onChoose,
 }: {
   initialPath: string;
+  candidates: readonly string[];
   onChoose: (choice: SetupChoice | null) => void;
 }): React.ReactElement {
   const { exit } = useApp();
   return (
     <SetupPrompt
       initialPath={initialPath}
+      candidates={candidates}
       onSubmit={(choice) => {
         onChoose(choice);
         exit();
