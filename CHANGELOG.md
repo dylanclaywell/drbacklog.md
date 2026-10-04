@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/dylanclaywell/drbacklog.md/compare/drbacklog-v0.4.0...drbacklog-v0.5.0) (2026-10-04)
+
+
+### Features
+
+* recover from missing or multiple backlog files ([ca920eb](https://github.com/dylanclaywell/drbacklog.md/commit/ca920eb8d80d60a2aa995ac88f11d03884fb03e2))
+
 ## [0.4.0](https://github.com/dylanclaywell/drbacklog.md/compare/drbacklog-v0.3.0...drbacklog-v0.4.0) (2026-09-03)
 
 
