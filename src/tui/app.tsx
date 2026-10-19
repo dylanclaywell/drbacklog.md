@@ -310,16 +310,21 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
     (to: TaskStatus) => {
       if (!activeTask) return;
       const id = activeTask.id;
+      const previous = selected;
       setMoveMode(false);
       store
         .mutate((d) => moveTask(d, { id, status: to }))
-        .then(() => {
+        .then(() => store.load())
+        .then((d) => {
+          setDoc(d);
+          // The moved task has usually left this tab, so the cursor holds its
+          // row — clamped, in case it was the last one.
+          setSelected(selectionAfterChange(tasksForTab(d, tab, view), id, previous));
           setStatus(`#${id} -> ${to}`);
-          reload();
         })
         .catch(handleError);
     },
-    [activeTask, store, reload],
+    [activeTask, selected, store, tab, query, priorityFilter, sortMode],
   );
 
   const applyPriority = useCallback(
