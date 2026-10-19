@@ -3,26 +3,31 @@
 // exists, and serves the tools over stdio.
 
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { dirname } from 'node:path';
 
-import { BacklogStore, resolveBacklogPath } from './store.js';
+import { BacklogStore } from './store.js';
+import { resolveBacklogLocation } from './discover.js';
 import { parseFileArg } from './cli.js';
 import { createServer } from './server.js';
 
 async function main(): Promise<void> {
-  const backlogPath = resolveBacklogPath(
+  const location = resolveBacklogLocation(
     process.cwd(),
     process.env,
     parseFileArg(process.argv.slice(2)),
   );
-  const store = new BacklogStore(backlogPath);
-  await store.ensureInitialized();
+  const store = new BacklogStore(location.path);
+  // Never create the file here: a missing or ambiguous backlog is surfaced
+  // through the tools, which ask the user before set_backlog_file creates one.
 
-  const server = createServer(store, { exportDir: dirname(backlogPath) });
+  const server = createServer(store, { location });
   await server.connect(new StdioServerTransport());
 
   // stdout carries the MCP protocol; diagnostics must go to stderr.
-  console.error(`DrBacklog MCP server running (backlog: ${backlogPath})`);
+  console.error(
+    location.ambiguous
+      ? `DrBacklog MCP server running, but several backlogs were found and none is configured: ${location.ambiguous.join(', ')}`
+      : `DrBacklog MCP server running (backlog: ${location.path})`,
+  );
 }
 
 main().catch((err: unknown) => {

@@ -116,7 +116,23 @@ async function renameWithRetry(from: string, to: string, attempts = 10): Promise
 export class BacklogStore {
   private tail: Promise<unknown> = Promise.resolve();
 
-  constructor(private readonly filePath: string) {}
+  constructor(private filePath: string) {}
+
+  /** The backlog file this store reads and writes. */
+  get path(): string {
+    return this.filePath;
+  }
+
+  /**
+   * Point the store at a different file. Runs under the lock so it can't land
+   * in the middle of a read-modify-write.
+   */
+  async setPath(filePath: string): Promise<void> {
+    await this.runExclusive(() => {
+      this.filePath = filePath;
+      return Promise.resolve();
+    });
+  }
 
   /**
    * Read and parse the backlog, or an empty document if the file is absent.
