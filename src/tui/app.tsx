@@ -6,7 +6,13 @@
 import { Box, Text, useApp, useInput, useStdin, useStdout } from 'ink';
 import React, { useCallback, useEffect, useState } from 'react';
 
-import { compareByPriority, findTasks, moveTask, updateTask } from '../operations.js';
+import {
+  compareByPriority,
+  findTasks,
+  moveTask,
+  setTaskPriority,
+  updateTask,
+} from '../operations.js';
 import type { BacklogDocument, Task, TaskPriority, TaskStatus } from '../model.js';
 import { PRIORITIES, priorityFor, SECTIONS } from '../model.js';
 import { LegacyFormatError } from '../store.js';
@@ -55,6 +61,28 @@ export function matchesPriorityFilter(task: Task, filter: PriorityFilter): boole
   if (filter === undefined) return true;
   if (filter === 'NONE') return task.priority === undefined;
   return task.priority === filter;
+}
+
+/**
+ * What the `P` prompt offers, left to right: each level, most urgent first,
+ * then 'NONE' to clear it. Unlike the filter there's no "all" here — a task
+ * holds exactly one of these.
+ */
+export type PriorityChoice = TaskPriority | 'NONE';
+export const PRIORITY_CHOICES: readonly PriorityChoice[] = [
+  ...PRIORITIES.map((p) => p.priority),
+  'NONE',
+];
+
+/**
+ * Where the cursor should land once a change has reshuffled the list: on the
+ * same task if it's still visible (a priority sort may have moved it), else
+ * on the row it used to occupy, clamped (a priority filter may have hidden it).
+ */
+export function selectionAfterChange(list: readonly Task[], id: number, previous: number): number {
+  const index = list.findIndex((t) => t.id === id);
+  if (index !== -1) return index;
+  return Math.max(0, Math.min(previous, list.length - 1));
 }
 
 // A small, deliberately narrow palette: one accent color owns focus/selection
@@ -216,6 +244,8 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
   const [filterMode, setFilterMode] = useState(false);
   const [moveMode, setMoveMode] = useState(false);
   const [moveCursor, setMoveCursor] = useState(0);
+  const [priorityMode, setPriorityMode] = useState(false);
+  const [priorityCursor, setPriorityCursor] = useState(0);
   const [editMode, setEditMode] = useState(false);
   const [editDraft, setEditDraft] = useState('');
   const [editCursor, setEditCursor] = useState(0);
@@ -290,6 +320,26 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
         .catch(handleError);
     },
     [activeTask, store, reload],
+  );
+
+  const applyPriority = useCallback(
+    (choice: PriorityChoice) => {
+      if (!activeTask) return;
+      const id = activeTask.id;
+      const previous = selected;
+      const priority = choice === 'NONE' ? undefined : choice;
+      setPriorityMode(false);
+      store
+        .mutate((d) => setTaskPriority(d, { id, priority }))
+        .then(() => store.load())
+        .then((d) => {
+          setDoc(d);
+          setSelected(selectionAfterChange(tasksForTab(d, tab, view), id, previous));
+          setStatus(`#${id} priority -> ${priority ?? 'none'}`);
+        })
+        .catch(handleError);
+    },
+    [activeTask, selected, store, tab, query, priorityFilter, sortMode],
   );
 
   const saveEdit = useCallback(() => {
@@ -394,6 +444,29 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
       return;
     }
 
+    if (priorityMode) {
+      if (key.escape) {
+        setPriorityMode(false);
+        return;
+      }
+      if (key.leftArrow) {
+        setPriorityCursor((i) => (i - 1 + PRIORITY_CHOICES.length) % PRIORITY_CHOICES.length);
+        return;
+      }
+      if (key.rightArrow) {
+        setPriorityCursor((i) => (i + 1) % PRIORITY_CHOICES.length);
+        return;
+      }
+      if (key.return) {
+        applyPriority(PRIORITY_CHOICES[priorityCursor] as PriorityChoice);
+        return;
+      }
+      // Digits pick by position, the same as in the move prompt: 1 = HIGH … 4 = none.
+      const digitChoice = PRIORITY_CHOICES[Number(input) - 1];
+      if (digitChoice) applyPriority(digitChoice);
+      return;
+    }
+
     if (filterMode) {
       if (key.return || key.escape) {
         setFilterMode(false);
@@ -489,6 +562,13 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
     if (input === 'm' && activeTask) {
       setMoveCursor(STATUS_ORDER.indexOf(activeTask.status));
       setMoveMode(true);
+      return;
+    }
+    // Shift+p: `p` alone is the display-only filter; setting a priority writes
+    // to backlog.md, so it gets the shifted key and a confirm step.
+    if (input === 'P' && activeTask) {
+      setPriorityCursor(PRIORITY_CHOICES.indexOf(activeTask.priority ?? 'NONE'));
+      setPriorityMode(true);
       return;
     }
     if (input === 'e' && activeTask) {
@@ -703,6 +783,7 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
     ['s', sortMode === 'file' ? 'sort by priority' : 'sort by file order'],
     ['p', `priority: ${priorityFilterLabel(priorityFilter)}`],
     ['m', 'move task'],
+    ['P', 'set priority'],
     ['e', 'edit description'],
     ['r', 'reload'],
     ['q', 'quit'],
@@ -763,6 +844,28 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
               >
                 {'  '}
                 {s}
+                {'  '}
+              </Text>
+            ))}
+            <Text dimColor> ←/→ pick · enter confirm · esc cancel</Text>
+          </Box>
+        ) : priorityMode && activeTask ? (
+          <Box>
+            <Text color={THEME.accent}>Priority for </Text>
+            <Text bold>#{activeTask.id}</Text>
+            <Text color={THEME.accent}> → </Text>
+            {PRIORITY_CHOICES.map((c, i) => (
+              <Text
+                key={c}
+                bold={i === priorityCursor}
+                underline={i === priorityCursor}
+                color={
+                  i === priorityCursor ? THEME.accent : c === 'NONE' ? undefined : THEME.priority[c]
+                }
+                dimColor={c === 'NONE' && i !== priorityCursor}
+              >
+                {'  '}
+                {c === 'NONE' ? 'none' : `${c} ${priorityFor(c).marker}`}
                 {'  '}
               </Text>
             ))}

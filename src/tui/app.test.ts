@@ -8,8 +8,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   matchesPriorityFilter,
+  PRIORITY_CHOICES,
   PRIORITY_FILTER_CYCLE,
   priorityFilterLabel,
+  selectionAfterChange,
   tasksForTab,
   type PriorityFilter,
   type ViewOptions,
@@ -85,6 +87,37 @@ describe('matchesPriorityFilter', () => {
   it("'NONE' selects untriaged tasks, which no real level can", () => {
     expect(matchesPriorityFilter(task(), 'NONE')).toBe(true);
     expect(matchesPriorityFilter(task('MEDIUM'), 'NONE')).toBe(false);
+  });
+});
+
+describe('PRIORITY_CHOICES', () => {
+  it('offers each level, most urgent first, then a way to clear it', () => {
+    expect(PRIORITY_CHOICES).toEqual(['HIGH', 'MEDIUM', 'LOW', 'NONE']);
+  });
+});
+
+describe('selectionAfterChange', () => {
+  it('follows the task to its new row when a priority sort moved it', () => {
+    const doc = seededDoc();
+    doc.tasks.find((t) => t.title === 'low one')!.priority = 'HIGH';
+    const list = tasksForTab(doc, 'TODO', view({ sortMode: 'priority' }));
+    // 'low one' was row 2 under priority sort; now HIGH, it ties 'high one'
+    // and keeps file order, so it sorts to the top.
+    expect(selectionAfterChange(list, 1, 2)).toBe(0);
+  });
+
+  it('stays on the same row when a filter hid the task', () => {
+    const doc = seededDoc();
+    doc.tasks.find((t) => t.title === 'untriaged one')!.priority = 'LOW';
+    const list = tasksForTab(doc, 'TODO', view({ priorityFilter: 'NONE' }));
+    expect(list).toEqual([]);
+    expect(selectionAfterChange(list, 2, 0)).toBe(0);
+  });
+
+  it('clamps to the last row when the hidden task was at the bottom', () => {
+    const doc = seededDoc();
+    const list = tasksForTab(doc, 'TODO', view()).slice(0, 3);
+    expect(selectionAfterChange(list, 99, 3)).toBe(2);
   });
 });
 
