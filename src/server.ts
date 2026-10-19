@@ -19,19 +19,30 @@ import {
   getEpicTasks,
   getTask,
   listEpics,
+  listTasksByPriority,
   moveTask,
   removeEpic,
   removeTask,
   setTaskEpic,
+  setTaskPriority,
+  sortTasksByPriority,
   TaskNotFoundError,
   updateEpic,
   updateTask,
 } from './operations.js';
 import { renderSummary } from './render.js';
 import { LegacyFormatError, type BacklogStore, type LoadOptions } from './store.js';
-import type { Epic, Task } from './model.js';
+import type { Epic, Task, TaskPriority } from './model.js';
 
 const idSchema = z.coerce.number().int().positive();
+
+const statusSchema = z.enum(['TODO', 'DONE', 'CLOSED']);
+
+// Spelled out rather than derived from PRIORITIES so the generated JSON schema
+// stays a plain string enum. The `satisfies` keeps it honest: dropping a level
+// from the model without updating this list is a compile error.
+const prioritySchema = z.enum(['HIGH', 'MEDIUM', 'LOW']);
+const _priorityValuesMatchModel = prioritySchema.options satisfies readonly TaskPriority[];
 
 // Every tool takes this: the file is only migrated from the pre-rename format
 // when a caller passes migrate: true, so an old file is never rewritten
@@ -97,6 +108,7 @@ function formatTaskDetail(task: Task): string {
     `* Title: ${task.title}`,
     `* Description: ${task.description}`,
   ];
+  if (task.priority !== undefined) lines.push(`* Priority: ${task.priority}`);
   if (task.epicId !== undefined) lines.push(`* Epic: #${task.epicId}`);
   if (task.resolution !== undefined) lines.push(`* Resolution: ${task.resolution}`);
   return lines.join('\n');
@@ -105,7 +117,10 @@ function formatTaskDetail(task: Task): string {
 function formatTaskList(tasks: Task[], emptyMessage: string): string {
   if (tasks.length === 0) return emptyMessage;
   return tasks
-    .map((task) => `- [#${task.id}: ${task.title}](#task-${task.id}) — ${task.status}`)
+    .map((task) => {
+      const priority = task.priority === undefined ? '' : ` · ${task.priority}`;
+      return `- [#${task.id}: ${task.title}](#task-${task.id}) — ${task.status}${priority}`;
+    })
     .join('\n');
 }
 
@@ -129,18 +144,22 @@ export function createServer(store: BacklogStore, options: CreateServerOptions):
     'add_task',
     {
       title: 'Add a task',
-      description: 'Add a new task to the backlog. New tasks start with status TODO.',
+      description:
+        'Add a new task to the backlog. New tasks start with status TODO. Set priority only ' +
+        'if the user indicated how urgent this is — leaving it off marks the task untriaged, ' +
+        'which is more honest than guessing a level.',
       inputSchema: {
         title: z.string().min(1),
         description: z.string(),
+        priority: prioritySchema.optional(),
         migrate: migrateSchema,
       },
     },
-    async ({ title, description, migrate }) =>
+    async ({ title, description, priority, migrate }) =>
       guarded(async () => {
         const loadOptions: LoadOptions = { migrate };
         const task = await store.mutate(
-          (doc) => addTask(doc, { title, description, created: today() }),
+          (doc) => addTask(doc, { title, description, created: today(), priority }),
           loadOptions,
         );
         return text(`Created task #${task.id}.`);
@@ -155,7 +174,7 @@ export function createServer(store: BacklogStore, options: CreateServerOptions):
         'Move a task to a new status: TODO, DONE, or CLOSED. Optionally record a resolution note (applied when DONE or CLOSED).',
       inputSchema: {
         id: idSchema,
-        status: z.enum(['TODO', 'DONE', 'CLOSED']),
+        status: statusSchema,
         resolution: z.string().optional(),
         migrate: migrateSchema,
       },
@@ -270,16 +289,17 @@ export function createServer(store: BacklogStore, options: CreateServerOptions):
         'server-side instead of dumping the whole backlog to scan by eye.',
       inputSchema: {
         query: z.string().min(1),
-        status: z.enum(['TODO', 'DONE', 'CLOSED']).optional(),
+        status: statusSchema.optional(),
         epicId: idSchema.optional(),
+        priority: prioritySchema.optional(),
         limit: z.coerce.number().int().positive().max(50).optional(),
         migrate: migrateSchema,
       },
     },
-    async ({ query, status, epicId, limit, migrate }) =>
+    async ({ query, status, epicId, priority, limit, migrate }) =>
       guarded(async () => {
         const doc = await store.load({ migrate });
-        const matches = findTasks(doc, { query, status, epicId, limit });
+        const matches = findTasks(doc, { query, status, epicId, priority, limit });
         return text(formatTaskList(matches, `No matches for '${query}'.`));
       }),
   );
@@ -413,6 +433,77 @@ export function createServer(store: BacklogStore, options: CreateServerOptions):
         const doc = await store.load({ migrate });
         if (!getEpic(doc, id)) return notFoundEpic(id);
         return text(formatEpicTaskList(id, getEpicTasks(doc, id)));
+      }),
+  );
+
+  server.registerTool(
+    'set_task_priority',
+    {
+      title: "Set or clear a task's priority",
+      description:
+        "Set a task's priority to HIGH, MEDIUM, or LOW. Omit priority to clear it, returning " +
+        'the task to untriaged. Untriaged is a real state, distinct from MEDIUM — it means ' +
+        'nobody has decided yet.',
+      inputSchema: {
+        id: idSchema,
+        priority: prioritySchema.optional(),
+        migrate: migrateSchema,
+      },
+    },
+    async ({ id, priority, migrate }) =>
+      guarded(async () => {
+        try {
+          await store.mutate((doc) => setTaskPriority(doc, { id, priority }), { migrate });
+          return text(
+            priority !== undefined
+              ? `Task #${id} set to ${priority} priority.`
+              : `Task #${id}'s priority cleared.`,
+          );
+        } catch (err) {
+          if (err instanceof TaskNotFoundError) return notFound(id);
+          throw err;
+        }
+      }),
+  );
+
+  server.registerTool(
+    'list_tasks_by_priority',
+    {
+      title: 'List tasks in priority order',
+      description:
+        'Return tasks ordered by priority, HIGH first, with untriaged tasks last. Read-only: ' +
+        'the backlog file is not reordered. By default nothing is filtered out — untriaged ' +
+        'tasks are included at the end — so this is the tool for "what should I work on next". ' +
+        'Pass status or priority to narrow it.',
+      inputSchema: {
+        status: statusSchema.optional(),
+        priority: prioritySchema.optional(),
+        migrate: migrateSchema,
+      },
+    },
+    async ({ status, priority, migrate }) =>
+      guarded(async () => {
+        const doc = await store.load({ migrate });
+        const tasks = listTasksByPriority(doc, { status, priority });
+        return text(formatTaskList(tasks, 'No tasks match.'));
+      }),
+  );
+
+  server.registerTool(
+    'sort_backlog_by_priority',
+    {
+      title: 'Reorder the backlog file by priority',
+      description:
+        'Rewrite backlog.md with its tasks reordered by priority, HIGH first and untriaged ' +
+        'last. This changes the file itself and touches every task line, so use it only when ' +
+        'the user explicitly asks to sort or reorder the backlog. To simply view tasks in ' +
+        'priority order without modifying the file, use list_tasks_by_priority instead.',
+      inputSchema: { migrate: migrateSchema },
+    },
+    async ({ migrate }) =>
+      guarded(async () => {
+        const tasks = await store.mutate((doc) => sortTasksByPriority(doc), { migrate });
+        return text(`Backlog reordered by priority (${tasks.length} tasks).`);
       }),
   );
 

@@ -42,7 +42,7 @@ describe('MCP server', () => {
     return (await client.callTool({ name, arguments: args })) as TextResult;
   }
 
-  it('exposes all fifteen tools', async () => {
+  it('exposes all eighteen tools', async () => {
     const names = (await client.listTools()).tools.map((t) => t.name).sort();
     expect(names).toEqual(
       [
@@ -61,6 +61,9 @@ describe('MCP server', () => {
         'get_epic',
         'list_epics',
         'get_epic_tasks',
+        'set_task_priority',
+        'list_tasks_by_priority',
+        'sort_backlog_by_priority',
       ].sort(),
     );
   });
@@ -201,6 +204,81 @@ describe('MCP server', () => {
       const result = await call('set_task_epic', { id: 1, epicId: 999 });
       expect(result.isError).toBe(true);
       expect(resultText(result)).toContain('No epic #999');
+    });
+  });
+
+  describe('priorities', () => {
+    /** Three TODO tasks added out of rank order, one deliberately untriaged. */
+    async function seed(): Promise<void> {
+      await call('add_task', { title: 'low one', description: '', priority: 'LOW' });
+      await call('add_task', { title: 'untriaged one', description: '' });
+      await call('add_task', { title: 'high one', description: '', priority: 'HIGH' });
+    }
+
+    it('add_task records a priority and get_task reports it', async () => {
+      await call('add_task', { title: 'Urgent', description: 'now', priority: 'HIGH' });
+      expect(resultText(await call('get_task', { id: 1 }))).toContain('Priority: HIGH');
+    });
+
+    it('add_task without a priority leaves the task untriaged', async () => {
+      await call('add_task', { title: 'Whatever', description: '' });
+      expect(resultText(await call('get_task', { id: 1 }))).not.toContain('Priority:');
+    });
+
+    it('set_task_priority sets and then clears a priority', async () => {
+      await call('add_task', { title: 'A task', description: '' });
+      expect(resultText(await call('set_task_priority', { id: 1, priority: 'MEDIUM' }))).toContain(
+        'set to MEDIUM priority',
+      );
+      expect(resultText(await call('get_task', { id: 1 }))).toContain('Priority: MEDIUM');
+
+      expect(resultText(await call('set_task_priority', { id: 1 }))).toContain('priority cleared');
+      expect(resultText(await call('get_task', { id: 1 }))).not.toContain('Priority:');
+    });
+
+    it('set_task_priority reports an unknown id as an error', async () => {
+      const result = await call('set_task_priority', { id: 999, priority: 'HIGH' });
+      expect(result.isError).toBe(true);
+      expect(resultText(result)).toContain('No task #999');
+    });
+
+    it('set_task_priority rejects a level outside the enum', async () => {
+      await call('add_task', { title: 'A task', description: '' });
+      const result = await call('set_task_priority', { id: 1, priority: 'URGENT' });
+      expect(result.isError).toBe(true);
+    });
+
+    it('the index marker lands in backlog.md', async () => {
+      await call('add_task', { title: 'Urgent', description: '', priority: 'HIGH' });
+      const onDisk = await readFile(join(dir, 'backlog.md'), 'utf8');
+      expect(onDisk).toContain('- [ ] [#1: Urgent](#task-1) !!!');
+      expect(onDisk).toContain('* **Priority:** HIGH');
+    });
+
+    it('list_tasks_by_priority orders HIGH first and keeps untriaged tasks last', async () => {
+      await seed();
+      const lines = resultText(await call('list_tasks_by_priority', {})).split('\n');
+      expect(lines.map((l) => l.slice(l.indexOf(': ') + 2, l.indexOf(']')))).toEqual([
+        'high one',
+        'low one',
+        'untriaged one',
+      ]);
+    });
+
+    it('list_tasks_by_priority leaves the file untouched', async () => {
+      await seed();
+      const before = await readFile(join(dir, 'backlog.md'), 'utf8');
+      await call('list_tasks_by_priority', {});
+      expect(await readFile(join(dir, 'backlog.md'), 'utf8')).toBe(before);
+    });
+
+    it('sort_backlog_by_priority reorders the file itself', async () => {
+      await seed();
+      expect(resultText(await call('sort_backlog_by_priority', {}))).toContain('3 tasks');
+
+      const onDisk = await readFile(join(dir, 'backlog.md'), 'utf8');
+      expect(onDisk.indexOf('#3: high one')).toBeLessThan(onDisk.indexOf('#1: low one'));
+      expect(onDisk.indexOf('#1: low one')).toBeLessThan(onDisk.indexOf('#2: untriaged one'));
     });
   });
 

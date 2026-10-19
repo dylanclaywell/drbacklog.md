@@ -18,8 +18,9 @@ function sampleDoc(): BacklogDocument {
         title: 'Implement OAuth2 login',
         description: 'Integrate Google and GitHub authentication.\nStore refresh tokens securely.',
         status: 'TODO',
+        priority: 'HIGH',
         created: '2026-07-16',
-        extraLines: ['* **Priority:** high'],
+        extraLines: ['* **Owner:** platform-team'],
       },
       {
         id: 102,
@@ -112,7 +113,7 @@ describe('round trip', () => {
     const doc = parse(render(sampleDoc()));
     expect(doc.passthrough.preamble).toEqual(['A note under the title.']);
     expect(doc.passthrough.midNotes).toEqual(['A note between the index and the details.']);
-    expect(doc.tasks[0]!.extraLines).toEqual(['* **Priority:** high']);
+    expect(doc.tasks[0]!.extraLines).toEqual(['* **Owner:** platform-team']);
   });
 });
 
@@ -207,5 +208,110 @@ describe('epics', () => {
   it('round-trips a document with epics, including the task -> epic link', () => {
     const doc = docWithEpic();
     expect(parse(render(doc))).toEqual(doc);
+  });
+});
+
+describe('priorities', () => {
+  function docWithPriorities(): BacklogDocument {
+    return {
+      title: DEFAULT_TITLE,
+      passthrough: { preamble: [], midNotes: [] },
+      epics: [],
+      tasks: [
+        {
+          id: 1,
+          title: 'Urgent thing',
+          description: 'Do it now.',
+          status: 'TODO',
+          priority: 'HIGH',
+          created: '2026-07-17',
+          extraLines: [],
+        },
+        {
+          id: 2,
+          title: 'Untriaged thing',
+          description: 'Nobody decided yet.',
+          status: 'TODO',
+          created: '2026-07-17',
+          extraLines: [],
+        },
+        {
+          id: 3,
+          title: 'Minor thing',
+          description: 'Someday.',
+          status: 'DONE',
+          priority: 'LOW',
+          created: '2026-07-17',
+          extraLines: [],
+        },
+      ],
+    };
+  }
+
+  it('emits a Priority field and index marker only on prioritized tasks', () => {
+    const text = render(docWithPriorities());
+    expect(text).toContain('* **Priority:** HIGH');
+    expect(text).toContain('- [ ] [#1: Urgent thing](#task-1) !!!');
+    expect(text).toContain('- [x] [#3: Minor thing](#task-3) !');
+    // The untriaged task gets neither, so a backlog that doesn't use
+    // priorities renders exactly as it did before priorities existed.
+    expect(text).toContain('- [ ] [#2: Untriaged thing](#task-2)\n');
+    const task2Block = text.slice(text.indexOf('### #2:'), text.indexOf('### #3:'));
+    expect(task2Block).not.toContain('* **Priority:**');
+  });
+
+  it('round-trips priorities, including the absence of one', () => {
+    const doc = docWithPriorities();
+    expect(parse(render(doc))).toEqual(doc);
+  });
+
+  it('render stays idempotent with index markers present', () => {
+    const once = render(docWithPriorities());
+    expect(render(parse(once))).toBe(once);
+  });
+
+  it('does not reorder tasks on render — sorting is an explicit operation', () => {
+    const text = render(docWithPriorities());
+    // Task 2 is untriaged and task 1 is HIGH, yet document order is preserved.
+    expect(text.indexOf('#1: Urgent thing')).toBeLessThan(text.indexOf('#2: Untriaged thing'));
+    expect(text.indexOf('#2: Untriaged thing')).toBeLessThan(text.indexOf('#3: Minor thing'));
+  });
+
+  it('reads a hand-written Priority value case-insensitively', () => {
+    const doc = parse(
+      [
+        `# ${DEFAULT_TITLE}`,
+        '',
+        `## ${DETAILS_HEADING}`,
+        '',
+        '### #1: A task',
+        '* **Status:** TODO',
+        '* **Priority:** high',
+        '* **Created:** 2026-07-17',
+        '* **Description:** A description.',
+        '',
+      ].join('\n'),
+    );
+    expect(doc.tasks[0]!.priority).toBe('HIGH');
+    expect(doc.tasks[0]!.extraLines).toEqual([]);
+  });
+
+  it('preserves an unrecognized Priority value verbatim instead of coercing it', () => {
+    const doc = parse(
+      [
+        `# ${DEFAULT_TITLE}`,
+        '',
+        `## ${DETAILS_HEADING}`,
+        '',
+        '### #1: A task',
+        '* **Status:** TODO',
+        '* **Priority:** whenever I get to it',
+        '* **Created:** 2026-07-17',
+        '* **Description:** A description.',
+        '',
+      ].join('\n'),
+    );
+    expect(doc.tasks[0]!.priority).toBeUndefined();
+    expect(doc.tasks[0]!.extraLines).toEqual(['* **Priority:** whenever I get to it']);
   });
 });

@@ -85,6 +85,59 @@ own details. Manage epics with `add_epic`, `update_epic`, `remove_epic`, and
 `set_task_epic` (link or, called with no `epicId`, unlink); read them back
 with `get_epic`, `list_epics`, and `get_epic_tasks` (see [Tools](#tools)).
 
+### Priorities (optional)
+
+Tasks can carry a priority: `HIGH`, `MEDIUM`, or `LOW`. Like epics, this is
+entirely opt-in — a task nobody has prioritized gets no `Priority` field and no
+index marker, so a backlog that doesn't use priorities looks exactly as it
+always did. Untriaged is a real, distinct state, not a synonym for `MEDIUM`:
+it means nobody has decided yet.
+
+A prioritized task shows a marker in the top index (`!!!` / `!!` / `!`) and a
+field in its details:
+
+```markdown
+## TODO
+
+- [ ] [#101: Implement OAuth2 login](#task-101) !!!
+- [ ] [#103: Rename an internal helper](#task-103) !
+- [ ] [#104: Nobody has triaged this one](#task-104)
+
+---
+
+## Task Details
+
+<a id="task-101"></a>
+
+### #101: Implement OAuth2 login
+
+- **Status:** TODO
+- **Priority:** HIGH
+- **Created:** 2026-07-16
+- **Description:** Integrate Google and GitHub authentication.
+```
+
+Set one with `set_task_priority` (call it with no `priority` to clear it back
+to untriaged), or pass `priority` to `add_task`. `find_tasks` takes a
+`priority` filter.
+
+**Ordering is never automatic.** Writing a priority doesn't move a task, so
+reprioritizing one item doesn't reshuffle the file and blow up the diff. Two
+separate tools handle order, and the distinction matters:
+
+- `list_tasks_by_priority` — a read-only **view**, HIGH first and untriaged
+  last. Nothing is filtered out by default (untriaged tasks come along at the
+  end), and `backlog.md` is not touched. This is the "what should I work on
+  next" tool.
+- `sort_backlog_by_priority` — actually **rewrites** `backlog.md` with its
+  tasks reordered. It touches every task line, so it only runs when you ask
+  for it explicitly.
+
+A hand-written `* **Priority:** high` is read case-insensitively. A value
+that isn't one of the three levels (`* **Priority:** whenever I get to it`)
+is left alone as an unrecognized line and preserved verbatim, rather than
+being coerced into a level you never chose.
+
 ### Migrating an old (pre-rename) `backlog.md`
 
 Versions before 0.3.0 used a hospital-themed format (`🚨 CRITICAL (TODO)`,
@@ -95,6 +148,10 @@ with `migrate: true`. That migrates the file in place — renaming headings and
 `Admitted` → `Created`, changing no task data — then runs the originally
 requested action. No separate migration step or tool call is needed; just
 approve it when asked.
+
+The TUI handles the same case itself: open an old-format backlog and it shows
+what migration will change and waits for `y` before touching the file (`esc`
+or `q` quits and leaves it alone).
 
 ## Install
 
@@ -225,6 +282,9 @@ The file is created with an empty skeleton on first run if it doesn't exist.
 | `get_epic`            | Retrieve one epic's title and description by id.            |
 | `list_epics`          | Compact list of all epics (id and title only).             |
 | `get_epic_tasks`      | Compact list of all tasks linked to a given epic.           |
+| `set_task_priority`   | Set a task's priority; omit `priority` to clear it.         |
+| `list_tasks_by_priority` | Read-only view of tasks in priority order (untriaged last). |
+| `sort_backlog_by_priority` | Rewrite `backlog.md` with its tasks reordered by priority. |
 
 ## Development
 

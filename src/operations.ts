@@ -5,7 +5,8 @@
 // wraps them with input validation and plain result strings.
 
 import { fuzzyScore } from './fuzzy.js';
-import type { BacklogDocument, Epic, Task, TaskStatus } from './model.js';
+import { priorityRank } from './model.js';
+import type { BacklogDocument, Epic, Task, TaskPriority, TaskStatus } from './model.js';
 
 /** Thrown when an operation references a task id that is not in the backlog. */
 export class TaskNotFoundError extends Error {
@@ -73,6 +74,8 @@ export interface AddTaskInput {
   description: string;
   /** Creation date, `YYYY-MM-DD`, supplied by the caller's clock. */
   created: string;
+  /** Optional; omit to leave the task untriaged rather than guessing a level. */
+  priority?: TaskPriority;
 }
 
 /** Add a new task to the TODO section and return it. */
@@ -85,6 +88,7 @@ export function addTask(doc: BacklogDocument, input: AddTaskInput): Task {
     created: input.created,
     extraLines: [],
   };
+  if (input.priority !== undefined) task.priority = input.priority;
   doc.tasks.push(task);
   return task;
 }
@@ -151,6 +155,7 @@ export interface FindTasksInput {
   query: string;
   status?: TaskStatus;
   epicId?: number;
+  priority?: TaskPriority;
   /** Maximum results to return, ranked best-first. Default 10. */
   limit?: number;
 }
@@ -159,14 +164,16 @@ const TITLE_WEIGHT = 2;
 
 /**
  * Fuzzy-search tasks by title and description, ranked best-match-first.
- * Filters by status/epicId first (cheap, exact), then scores the remainder —
- * a task with no match in either field is dropped, not just scored 0.
+ * Filters by status/epicId/priority first (cheap, exact), then scores the
+ * remainder — a task with no match in either field is dropped, not just
+ * scored 0.
  */
 export function findTasks(doc: BacklogDocument, input: FindTasksInput): Task[] {
   const limit = input.limit ?? 10;
   return doc.tasks
     .filter((t) => input.status === undefined || t.status === input.status)
     .filter((t) => input.epicId === undefined || t.epicId === input.epicId)
+    .filter((t) => input.priority === undefined || t.priority === input.priority)
     .map((task) => ({
       task,
       score:
@@ -191,6 +198,8 @@ interface ExportRow {
   title: string;
   description: string;
   status: TaskStatus;
+  /** The priority level, or '' for an untriaged task. */
+  priority: string;
   created: string;
   resolution: string;
 }
@@ -200,6 +209,7 @@ const CSV_COLUMNS: readonly (keyof ExportRow)[] = [
   'title',
   'description',
   'status',
+  'priority',
   'created',
   'resolution',
 ];
@@ -211,6 +221,7 @@ function toRow(task: Task): ExportRow {
     title: task.title,
     description: task.description,
     status: task.status,
+    priority: task.priority ?? '',
     created: task.created,
     resolution: task.resolution ?? '',
   };
@@ -323,4 +334,74 @@ export function setTaskEpic(doc: BacklogDocument, input: SetTaskEpicInput): Task
   if (input.epicId !== undefined) findEpicOrThrow(doc, input.epicId);
   task.epicId = input.epicId;
   return task;
+}
+
+// --- Priorities ----------------------------------------------------------
+//
+// Priority is opt-in per task (see TaskPriority in model.ts). Nothing here
+// reorders the document on its own: `render` emits tasks in `doc.tasks` order,
+// so the file's order only changes when a caller explicitly asks for
+// `sortTasksByPriority`. `listTasksByPriority` is the read-only counterpart —
+// a sorted *view* that leaves the file exactly as it was.
+
+export interface SetTaskPriorityInput {
+  id: number;
+  /** The level to set; omit to clear the priority (back to untriaged). */
+  priority?: TaskPriority;
+}
+
+/** Set or clear a task's priority. Throws TaskNotFoundError for an unknown id. */
+export function setTaskPriority(doc: BacklogDocument, input: SetTaskPriorityInput): Task {
+  const task = findTaskOrThrow(doc, input.id);
+  task.priority = input.priority;
+  return task;
+}
+
+/**
+ * Order by priority (HIGH first, untriaged last), then by id so the result is
+ * deterministic and tasks of equal priority keep their familiar id order.
+ * Exported so the TUI's display-only sort orders tasks exactly the way the
+ * file-reordering tool does.
+ */
+export function compareByPriority(a: Task, b: Task): number {
+  const rank = priorityRank(a.priority) - priorityRank(b.priority);
+  return rank !== 0 ? rank : a.id - b.id;
+}
+
+export interface ListTasksByPriorityInput {
+  /** Restrict to one status; omit for every status. */
+  status?: TaskStatus;
+  /** Restrict to one level; omit to include every task, untriaged ones included. */
+  priority?: TaskPriority;
+}
+
+/**
+ * A priority-ordered *view* of the backlog. Returns a new array — `doc.tasks`
+ * and therefore the file's own order are untouched. Untriaged tasks are
+ * included (sorted last) unless a specific level is asked for: the common case
+ * is "show me everything, most urgent first", not "hide the untriaged work".
+ */
+export function listTasksByPriority(
+  doc: BacklogDocument,
+  input: ListTasksByPriorityInput = {},
+): Task[] {
+  return doc.tasks
+    .filter((t) => input.status === undefined || t.status === input.status)
+    .filter((t) => input.priority === undefined || t.priority === input.priority)
+    .slice()
+    .sort(compareByPriority);
+}
+
+/**
+ * Reorder `doc.tasks` in place by priority, which is what actually rewrites
+ * the file: both the index lists and the detail blocks follow `doc.tasks`
+ * order. This is deliberately an explicit operation rather than something
+ * `render` does every time — reprioritizing one task would otherwise reshuffle
+ * index lines and make every diff noisier than the change really was.
+ *
+ * Returns the tasks in their new order.
+ */
+export function sortTasksByPriority(doc: BacklogDocument): Task[] {
+  doc.tasks.sort(compareByPriority);
+  return doc.tasks;
 }

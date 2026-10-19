@@ -10,7 +10,14 @@
 // non-empty, so a backlog with no epics renders exactly as it did before
 // epics existed.
 
-import { anchorFor, DETAILS_HEADING, epicAnchorFor, EPICS_HEADING, SECTIONS } from './model.js';
+import {
+  anchorFor,
+  DETAILS_HEADING,
+  epicAnchorFor,
+  EPICS_HEADING,
+  priorityFor,
+  SECTIONS,
+} from './model.js';
 import type { BacklogDocument, Epic, Task } from './model.js';
 
 /**
@@ -33,7 +40,10 @@ function renderSection(
   const lines = [`## ${heading}`];
   for (const task of tasks) {
     if (task.status !== status) continue;
-    lines.push(`- [${checkbox}] [#${task.id}: ${task.title}](#${anchorFor(task.id)})`);
+    // Tasks nobody prioritized get no marker at all, so a backlog that doesn't
+    // use priorities renders exactly as it did before priorities existed.
+    const marker = task.priority === undefined ? '' : ` ${priorityFor(task.priority).marker}`;
+    lines.push(`- [${checkbox}] [#${task.id}: ${task.title}](#${anchorFor(task.id)})${marker}`);
   }
   return lines;
 }
@@ -42,6 +52,7 @@ function renderSection(
 function renderTask(task: Task): string[] {
   const lines = [`<a id="${anchorFor(task.id)}"></a>`, `### #${task.id}: ${task.title}`];
   lines.push(`* **Status:** ${task.status}`);
+  if (task.priority !== undefined) lines.push(`* **Priority:** ${task.priority}`);
   lines.push(`* **Created:** ${task.created}`);
   if (task.epicId !== undefined) lines.push(`* **Epic:** #${task.epicId}`);
   pushField(lines, 'Description', task.description);

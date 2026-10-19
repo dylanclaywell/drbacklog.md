@@ -10,17 +10,21 @@ import {
   getEpicTasks,
   getTask,
   listEpics,
+  listTasksByPriority,
   moveTask,
   nextEpicId,
   nextId,
   removeEpic,
   removeTask,
   setTaskEpic,
+  setTaskPriority,
+  sortTasksByPriority,
   TaskNotFoundError,
   updateEpic,
   updateTask,
 } from './operations.js';
 import { createEmptyDocument } from './store.js';
+import type { TaskPriority } from './model.js';
 
 function docWithTask(): { doc: ReturnType<typeof createEmptyDocument>; id: number } {
   const doc = createEmptyDocument();
@@ -309,9 +313,9 @@ describe('exportBacklog', () => {
     const { filename, content } = exportBacklog(doc, 'csv');
     expect(filename).toBe('backlog.csv');
     const lines = content.trimEnd().split('\n');
-    expect(lines[0]).toBe('id,title,description,status,created,resolution');
+    expect(lines[0]).toBe('id,title,description,status,priority,created,resolution');
     expect(lines).toHaveLength(2);
-    expect(lines[1]).toBe('1,Login,OAuth2.,TODO,2026-07-17,');
+    expect(lines[1]).toBe('1,Login,OAuth2.,TODO,,2026-07-17,');
   });
 
   it('escapes CSV fields containing commas, quotes, and newlines', () => {
@@ -430,5 +434,129 @@ describe('epics', () => {
       const task = addTask(doc, { title: 'a', description: '', created: '2026-07-17' });
       expect(() => setTaskEpic(doc, { id: task.id, epicId: 999 })).toThrow(EpicNotFoundError);
     });
+  });
+});
+
+describe('setTaskPriority', () => {
+  it('sets a priority on a task', () => {
+    const { doc, id } = docWithTask();
+    expect(setTaskPriority(doc, { id, priority: 'HIGH' }).priority).toBe('HIGH');
+  });
+
+  it('clears the priority when none is given', () => {
+    const { doc, id } = docWithTask();
+    setTaskPriority(doc, { id, priority: 'HIGH' });
+    expect(setTaskPriority(doc, { id }).priority).toBeUndefined();
+  });
+
+  it('throws TaskNotFoundError for an unknown id', () => {
+    const doc = createEmptyDocument();
+    expect(() => setTaskPriority(doc, { id: 99, priority: 'LOW' })).toThrow(TaskNotFoundError);
+  });
+});
+
+describe('addTask with a priority', () => {
+  it('records the priority when given', () => {
+    const doc = createEmptyDocument();
+    const task = addTask(doc, {
+      title: 'Urgent',
+      description: '',
+      created: '2026-07-17',
+      priority: 'HIGH',
+    });
+    expect(task.priority).toBe('HIGH');
+  });
+
+  it('leaves the task untriaged when no priority is given', () => {
+    const doc = createEmptyDocument();
+    const task = addTask(doc, { title: 'Whatever', description: '', created: '2026-07-17' });
+    expect(task.priority).toBeUndefined();
+    expect('priority' in task).toBe(false);
+  });
+});
+
+/** Tasks 1..4 covering every level plus one untriaged, added out of rank order. */
+function docWithPriorities() {
+  const doc = createEmptyDocument();
+  const add = (title: string, priority?: TaskPriority) =>
+    addTask(doc, { title, description: '', created: '2026-07-17', priority });
+  add('low one', 'LOW');
+  add('untriaged one');
+  add('high one', 'HIGH');
+  add('medium one', 'MEDIUM');
+  return doc;
+}
+
+describe('listTasksByPriority', () => {
+  it('orders HIGH first and untriaged last', () => {
+    const tasks = listTasksByPriority(docWithPriorities());
+    expect(tasks.map((t) => t.title)).toEqual([
+      'high one',
+      'medium one',
+      'low one',
+      'untriaged one',
+    ]);
+  });
+
+  it('includes untriaged tasks by default rather than filtering them out', () => {
+    const tasks = listTasksByPriority(docWithPriorities());
+    expect(tasks).toHaveLength(4);
+    expect(tasks.some((t) => t.priority === undefined)).toBe(true);
+  });
+
+  it('does not reorder the document itself', () => {
+    const doc = docWithPriorities();
+    const before = doc.tasks.map((t) => t.id);
+    listTasksByPriority(doc);
+    expect(doc.tasks.map((t) => t.id)).toEqual(before);
+  });
+
+  it('narrows to one level when asked', () => {
+    const tasks = listTasksByPriority(docWithPriorities(), { priority: 'HIGH' });
+    expect(tasks.map((t) => t.title)).toEqual(['high one']);
+  });
+
+  it('narrows by status', () => {
+    const doc = docWithPriorities();
+    moveTask(doc, { id: 3, status: 'DONE' });
+    expect(listTasksByPriority(doc, { status: 'DONE' }).map((t) => t.title)).toEqual(['high one']);
+  });
+
+  it('breaks priority ties by id', () => {
+    const doc = createEmptyDocument();
+    addTask(doc, { title: 'first', description: '', created: '', priority: 'HIGH' });
+    addTask(doc, { title: 'second', description: '', created: '', priority: 'HIGH' });
+    expect(listTasksByPriority(doc).map((t) => t.title)).toEqual(['first', 'second']);
+  });
+});
+
+describe('sortTasksByPriority', () => {
+  it('reorders the document in place, untriaged last', () => {
+    const doc = docWithPriorities();
+    sortTasksByPriority(doc);
+    expect(doc.tasks.map((t) => t.title)).toEqual([
+      'high one',
+      'medium one',
+      'low one',
+      'untriaged one',
+    ]);
+  });
+
+  it('is idempotent', () => {
+    const doc = docWithPriorities();
+    sortTasksByPriority(doc);
+    const once = doc.tasks.map((t) => t.id);
+    sortTasksByPriority(doc);
+    expect(doc.tasks.map((t) => t.id)).toEqual(once);
+  });
+});
+
+describe('findTasks priority filter', () => {
+  it('restricts matches to one level', () => {
+    const doc = createEmptyDocument();
+    addTask(doc, { title: 'login bug', description: '', created: '', priority: 'HIGH' });
+    addTask(doc, { title: 'login polish', description: '', created: '', priority: 'LOW' });
+    const matches = findTasks(doc, { query: 'login', priority: 'HIGH' });
+    expect(matches.map((t) => t.title)).toEqual(['login bug']);
   });
 });

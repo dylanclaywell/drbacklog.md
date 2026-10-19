@@ -17,16 +17,29 @@
 // enters the 'epics' state below, so a backlog.md with no epics round-trips
 // identically to before epics existed.
 
-import { DEFAULT_TITLE, DETAILS_HEADING, EPICS_HEADING, SECTIONS } from './model.js';
+import {
+  DEFAULT_TITLE,
+  DETAILS_HEADING,
+  EPICS_HEADING,
+  parsePriority,
+  PRIORITIES,
+  SECTIONS,
+} from './model.js';
 import type { BacklogDocument, Epic, Passthrough, Task, TaskStatus } from './model.js';
 
-type FieldKey = 'status' | 'created' | 'epic' | 'description' | 'resolution';
+type FieldKey = 'status' | 'created' | 'epic' | 'priority' | 'description' | 'resolution';
 
 const H1_RE = /^#\s+(.*\S)\s*$/;
 const H2_RE = /^##\s+(.*\S)\s*$/;
 const DIVIDER_RE = /^-{3,}\s*$/;
 const ANCHOR_RE = /^<a\s+id="(?:task|epic)-\d+"\s*><\/a>\s*$/i;
-const INDEX_ITEM_RE = /^-\s*\[[ xX]\]\s+\[.*\]\(#.*\)\s*$/;
+// An index line may carry a trailing priority marker (see PRIORITIES), so the
+// link is no longer necessarily the end of the line. Longest marker first, so
+// `!!!` isn't matched as `!` with two characters left over.
+const PRIORITY_MARKER_ALT = PRIORITIES.map((p) => p.marker).join('|');
+const INDEX_ITEM_RE = new RegExp(
+  `^-\\s*\\[[ xX]\\]\\s+\\[.*\\]\\(#[^)]*\\)(?:\\s+(?:${PRIORITY_MARKER_ALT}))?\\s*$`,
+);
 const TASK_HEADING_RE = /^###\s+#(\d+):\s*(.*?)\s*$/;
 const EPIC_HEADING_RE = /^###\s+Epic\s+#(\d+):\s*(.*?)\s*$/;
 // Matches any `* **Key:** value` bullet; the key is classified afterward.
@@ -38,6 +51,7 @@ const KNOWN_FIELDS: ReadonlySet<string> = new Set<FieldKey>([
   'status',
   'created',
   'epic',
+  'priority',
   'description',
   'resolution',
 ]);
@@ -116,7 +130,13 @@ function matchField(line: string, dialect: Dialect): { key: FieldKey; value: str
   const [, rawKey = '', value = ''] = m;
   const key = rawKey.trim().toLowerCase();
   const resolved = dialect.fieldAliases[key] ?? key;
-  return KNOWN_FIELDS.has(resolved) ? { key: resolved as FieldKey, value } : null;
+  if (!KNOWN_FIELDS.has(resolved)) return null;
+  // Priority is the one field whose *value* is also a closed set. A line like
+  // `* **Priority:** whenever I get to it` is rejected here so it falls through
+  // to extraLines and survives verbatim — coercing it to a level the author
+  // never wrote would silently rewrite their note on the next save.
+  if (resolved === 'priority' && parsePriority(value) === undefined) return null;
+  return { key: resolved as FieldKey, value };
 }
 
 /** Epic blocks only ever recognize Description; no dialect/aliases needed. */
@@ -150,6 +170,10 @@ function applyField(task: Task, key: FieldKey, value: string): void {
       break;
     case 'epic':
       task.epicId = parseEpicRef(value);
+      break;
+    case 'priority':
+      // matchField already rejected any value that isn't a known level.
+      task.priority = parsePriority(value);
       break;
     case 'description':
       task.description = value;

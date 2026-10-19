@@ -10,6 +10,17 @@
 export type TaskStatus = 'TODO' | 'DONE' | 'CLOSED';
 
 /**
+ * How urgent a task is. Deliberately a small closed set rather than a number:
+ * every value has an agreed meaning, and there's no "what does 7 mean" gap for
+ * a caller (or an LLM) to invent an answer to.
+ *
+ * A task may have no priority at all (`Task.priority` is optional). That is a
+ * distinct state from MEDIUM — "nobody has triaged this" versus "somebody
+ * decided it's middling" — and it sorts *after* LOW.
+ */
+export type TaskPriority = 'HIGH' | 'MEDIUM' | 'LOW';
+
+/**
  * A single backlog task. Its identity is the numeric `id`; the stable index
  * anchor is derived from the id alone (e.g. `#task-101`), so `title` can change
  * freely without breaking links.
@@ -38,6 +49,12 @@ export interface Task {
    * opt-in: a backlog with no epics renders and parses exactly as before.
    */
   epicId?: number;
+  /**
+   * How urgent this task is, if anyone has said (see `TaskPriority`). Optional
+   * and opt-in the same way `epicId` is: a task nobody prioritized emits no
+   * Priority field and no index marker, so an existing backlog.md is untouched.
+   */
+  priority?: TaskPriority;
 }
 
 /**
@@ -100,6 +117,54 @@ export const SECTIONS = [
   { status: 'DONE', heading: 'DONE', checkbox: 'x' },
   { status: 'CLOSED', heading: 'CLOSED', checkbox: 'x' },
 ] as const satisfies readonly SectionSpec[];
+
+/** Describes one priority level: how it sorts and how it renders. */
+export interface PrioritySpec {
+  priority: TaskPriority;
+  /** Sort rank; lower sorts first. Unprioritized tasks rank after all of these. */
+  rank: number;
+  /** Compact marker appended to the task's index line. */
+  marker: string;
+}
+
+/**
+ * The three priority levels, most urgent first. Single source of truth for
+ * recognizing a Priority field on parse, emitting its marker on render, and
+ * ordering tasks in the sort operations.
+ */
+export const PRIORITIES = [
+  { priority: 'HIGH', rank: 0, marker: '!!!' },
+  { priority: 'MEDIUM', rank: 1, marker: '!!' },
+  { priority: 'LOW', rank: 2, marker: '!' },
+] as const satisfies readonly PrioritySpec[];
+
+/** Look up the spec for a priority. */
+export function priorityFor(priority: TaskPriority): PrioritySpec {
+  const spec = PRIORITIES.find((p) => p.priority === priority);
+  // Total over the TaskPriority union: every priority has a spec.
+  if (!spec) throw new Error(`No spec defined for priority: ${priority}`);
+  return spec;
+}
+
+/**
+ * Sort rank for a task's priority, with unprioritized tasks ranking last.
+ * Keeping "no priority" one past the lowest real rank is what makes untriaged
+ * tasks sink to the bottom instead of landing in the middle next to MEDIUM.
+ */
+export function priorityRank(priority: TaskPriority | undefined): number {
+  return priority === undefined ? PRIORITIES.length : priorityFor(priority).rank;
+}
+
+/**
+ * Recognize a priority written in a backlog file or passed by a caller,
+ * case-insensitively. Returns undefined for anything that isn't one of the
+ * three levels — callers use that to leave the text alone rather than coerce
+ * it into a level the author never chose.
+ */
+export function parsePriority(value: string): TaskPriority | undefined {
+  const v = value.trim().toUpperCase();
+  return PRIORITIES.find((p) => p.priority === v)?.priority;
+}
 
 /** Default H1 title used when initializing a fresh backlog file. */
 export const DEFAULT_TITLE = 'DrBacklog';
