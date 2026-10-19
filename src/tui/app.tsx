@@ -6,9 +6,10 @@
 import { Box, Text, useApp, useInput, useStdin, useStdout } from 'ink';
 import React, { useCallback, useEffect, useState } from 'react';
 
-import { findTasks, moveTask, updateTask } from '../operations.js';
-import type { BacklogDocument, Task, TaskStatus } from '../model.js';
-import { SECTIONS } from '../model.js';
+import { compareByPriority, findTasks, moveTask, updateTask } from '../operations.js';
+import type { BacklogDocument, Task, TaskPriority, TaskStatus } from '../model.js';
+import { PRIORITIES, priorityFor, SECTIONS } from '../model.js';
+import { LegacyFormatError } from '../store.js';
 import type { BacklogStore } from '../store.js';
 
 export interface AppProps {
@@ -20,6 +21,41 @@ const STATUS_ORDER: readonly TaskStatus[] = SECTIONS.map((s) => s.status);
 
 /** 'list' shows one status at a time; 'board' shows all three as side-by-side cards. */
 type ViewMode = 'list' | 'board';
+
+/**
+ * How the visible list is ordered. Both are display-only — neither one writes
+ * to backlog.md. Reordering the file itself is the MCP `sort_backlog_by_priority`
+ * tool's job, deliberately kept out of reach of a single keystroke here.
+ *
+ *   file      the order tasks appear in backlog.md (or fuzzy rank, when filtering)
+ *   priority  HIGH first, untriaged last — the same order the sort tool writes
+ */
+export type SortMode = 'file' | 'priority';
+
+/**
+ * The active priority filter, also display-only. `undefined` shows everything;
+ * 'NONE' shows only untriaged tasks, which is how you find work nobody has
+ * triaged yet — a view you can't get by picking one of the three levels.
+ */
+export type PriorityFilter = TaskPriority | 'NONE' | undefined;
+
+/** The cycle `p` steps through: all -> each level, most urgent first -> untriaged -> all. */
+export const PRIORITY_FILTER_CYCLE: readonly PriorityFilter[] = [
+  undefined,
+  ...PRIORITIES.map((p) => p.priority),
+  'NONE',
+];
+
+export function priorityFilterLabel(filter: PriorityFilter): string {
+  if (filter === undefined) return 'all';
+  return filter === 'NONE' ? 'untriaged' : filter;
+}
+
+export function matchesPriorityFilter(task: Task, filter: PriorityFilter): boolean {
+  if (filter === undefined) return true;
+  if (filter === 'NONE') return task.priority === undefined;
+  return task.priority === filter;
+}
 
 // A small, deliberately narrow palette: one accent color owns focus/selection
 // everywhere (so "this is selected" never has to compete visually with "this
@@ -34,7 +70,24 @@ const THEME = {
     DONE: '#34d399', // emerald — shipped
     CLOSED: '#94a3b8', // slate — archived, deliberately muted
   } satisfies Record<TaskStatus, string>,
+  // Warm hues, ramped by urgency, so priority never reads as another status:
+  // status owns the cool end of the palette, priority the warm end.
+  priority: {
+    HIGH: '#f87171', // red
+    MEDIUM: '#fbbf24', // amber
+    LOW: '#a3a3a3', // neutral — present, but not asking for attention
+  } satisfies Record<TaskPriority, string>,
 } as const;
+
+/**
+ * The `!!!`/`!!`/`!` marker, colored by level — the same glyph the renderer
+ * writes into backlog.md's index, so the file and the TUI agree on shape as
+ * well as on meaning. Renders nothing for an untriaged task.
+ */
+function PriorityMark({ priority }: { priority: TaskPriority | undefined }): React.ReactElement {
+  if (priority === undefined) return <></>;
+  return <Text color={THEME.priority[priority]}> {priorityFor(priority).marker}</Text>;
+}
 
 /**
  * One glyph, reused everywhere a status needs to be recognized by shape as
@@ -102,11 +155,29 @@ function moveCursorByLines(text: string, cursor: number, lines: number): number 
 const HOME_SEQUENCES = new Set(['[H', 'OH', '[1~', '[7~', '[7$', '[7^']);
 const END_SEQUENCES = new Set(['[F', 'OF', '[4~', '[8~', '[8$', '[8^']);
 
-function tasksForTab(doc: BacklogDocument, tab: TaskStatus, query: string): Task[] {
-  if (query.trim().length === 0) {
-    return doc.tasks.filter((t) => t.status === tab);
-  }
-  return findTasks(doc, { query, status: tab, limit: 200 });
+/** The display-only view controls: what's filtered out and how it's ordered. */
+export interface ViewOptions {
+  query: string;
+  priorityFilter: PriorityFilter;
+  sortMode: SortMode;
+}
+
+/**
+ * The visible task list for one status tab. Every step here is a *view* over
+ * `doc.tasks` — the document is never mutated, so nothing on this path can
+ * reach backlog.md.
+ */
+export function tasksForTab(doc: BacklogDocument, tab: TaskStatus, view: ViewOptions): Task[] {
+  const base =
+    view.query.trim().length === 0
+      ? doc.tasks.filter((t) => t.status === tab)
+      : findTasks(doc, { query: view.query, status: tab, limit: 200 });
+  const filtered = base.filter((t) => matchesPriorityFilter(t, view.priorityFilter));
+  // Only re-sort when priority order was actually asked for: in 'file' mode a
+  // filtered list is in fuzzy-rank order, which is itself meaningful and would
+  // be destroyed by sorting. `slice` keeps the sort off the array findTasks or
+  // the filter returned.
+  return view.sortMode === 'priority' ? filtered.slice().sort(compareByPriority) : filtered;
 }
 
 // Fixed-height chrome around the scrolling list — every other row on screen
@@ -149,18 +220,48 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
   const [editDraft, setEditDraft] = useState('');
   const [editCursor, setEditCursor] = useState(0);
   const [query, setQuery] = useState('');
+  const [sortMode, setSortMode] = useState<SortMode>('file');
+  const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>(undefined);
   const [status, setStatus] = useState<string>('');
+  // True while the file is in the pre-rename format and the user hasn't yet
+  // said whether to migrate it. Its own screen, not an error: it's answerable.
+  const [legacy, setLegacy] = useState(false);
+  const [migrating, setMigrating] = useState(false);
+
+  // A legacy file isn't a failure, it's a question — route it to the confirm
+  // screen instead of the dead-end error pane. Anything else is a real error.
+  const handleError = useCallback((err: unknown) => {
+    if (err instanceof LegacyFormatError) setLegacy(true);
+    else setError(String(err));
+  }, []);
 
   const reload = useCallback(() => {
     store
       .load()
       .then((d) => setDoc(d))
-      .catch((err: unknown) => setError(String(err)));
+      .catch(handleError);
+  }, [store, handleError]);
+
+  // Migration only renames headings and the Admitted field; the same
+  // `migrate: true` path the MCP tools take, behind the same rule that a
+  // human has to say yes first.
+  const migrateNow = useCallback(() => {
+    setMigrating(true);
+    store
+      .load({ migrate: true })
+      .then((d) => {
+        setDoc(d);
+        setLegacy(false);
+        setStatus('backlog migrated to the current format');
+      })
+      .catch((err: unknown) => setError(String(err)))
+      .finally(() => setMigrating(false));
   }, [store]);
 
   useEffect(reload, [reload]);
 
-  const list = doc ? tasksForTab(doc, tab, query) : [];
+  const view: ViewOptions = { query, priorityFilter, sortMode };
+  const list = doc ? tasksForTab(doc, tab, view) : [];
   const activeTask = list[selected];
 
   const chromeHeight = BASE_CHROME_HEIGHT + (viewMode === 'list' ? TAB_BAR_ROWS : 0);
@@ -186,7 +287,7 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
           setStatus(`#${id} -> ${to}`);
           reload();
         })
-        .catch((err: unknown) => setError(String(err)));
+        .catch(handleError);
     },
     [activeTask, store, reload],
   );
@@ -202,10 +303,20 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
         setStatus(`#${id} description updated`);
         reload();
       })
-      .catch((err: unknown) => setError(String(err)));
+      .catch(handleError);
   }, [activeTask, editDraft, store, reload]);
 
   useInput((input, key) => {
+    // The migration confirm owns every key while it's up: nothing else can be
+    // done with an unmigrated file anyway, and a stray keystroke must never be
+    // what rewrites it.
+    if (legacy) {
+      if (migrating) return;
+      if (input.toLowerCase() === 'y') migrateNow();
+      else if (key.escape || input.toLowerCase() === 'q') exit();
+      return;
+    }
+
     if (editMode) {
       if (key.escape) {
         setEditMode(false);
@@ -350,6 +461,26 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
       setSelected((i) => Math.max(i - 1, 0));
       return;
     }
+    // Both of these are view state only — they never touch the store, so the
+    // file on disk is identical before and after. Selection resets to the top
+    // because the row under the cursor usually isn't the same row afterward.
+    if (input === 's') {
+      const next: SortMode = sortMode === 'file' ? 'priority' : 'file';
+      setSortMode(next);
+      setSelected(0);
+      setStatus(next === 'priority' ? 'sorted by priority (view only)' : 'sorted by file order');
+      return;
+    }
+    if (input === 'p') {
+      const next =
+        PRIORITY_FILTER_CYCLE[
+          (PRIORITY_FILTER_CYCLE.indexOf(priorityFilter) + 1) % PRIORITY_FILTER_CYCLE.length
+        ];
+      setPriorityFilter(next);
+      setSelected(0);
+      setStatus(`priority filter: ${priorityFilterLabel(next)}`);
+      return;
+    }
     if (input === 'r') {
       reload();
       setStatus('reloaded');
@@ -400,6 +531,44 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
     return (
       <Box flexDirection="column">
         <Text color="red">{error}</Text>
+      </Box>
+    );
+  }
+
+  // Spelled out rather than summarized: the user is being asked to approve a
+  // rewrite of the file, so they get to see exactly what it does first.
+  if (legacy) {
+    return (
+      <Box flexDirection="column">
+        <Box>
+          <Text color={THEME.accent}>▍</Text>
+          <Text bold> DrBacklog</Text>
+        </Box>
+        <Box marginTop={1}>
+          <Text dimColor>{backlogPath}</Text>
+        </Box>
+        <Box marginTop={1}>
+          <Text>This backlog is in the old pre-rename format.</Text>
+        </Box>
+        <Box marginTop={1} flexDirection="column">
+          <Text dimColor>Migrating renames the section headings</Text>
+          <Text dimColor> CRITICAL → TODO · STABLE → DONE · ARCHIVED → CLOSED</Text>
+          <Text dimColor>the Patient Ledger heading to Task Details, and the per-task</Text>
+          <Text dimColor>Admitted field to Created. The old default H1 is replaced;</Text>
+          <Text dimColor>a title you chose yourself is left alone, as is every task.</Text>
+        </Box>
+        <Box marginTop={1}>
+          {migrating ? (
+            <Text color={THEME.accent}>Migrating…</Text>
+          ) : (
+            <>
+              <Text color={THEME.accent}>y</Text>
+              <Text dimColor> migrate now · </Text>
+              <Text color={THEME.accent}>esc/q</Text>
+              <Text dimColor> quit and leave the file alone</Text>
+            </>
+          )}
+        </Box>
       </Box>
     );
   }
@@ -477,9 +646,11 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
   /** One board card. The focused column reuses the live-scrolling `visible` window; the other two just clip to what fits, since they have no selection to follow. */
   function renderCard(s: TaskStatus): React.ReactElement {
     const focused = s === tab;
-    const items = focused ? visible : tasksForTab(doc!, s, query).slice(0, contentHeight);
+    const items = focused ? visible : tasksForTab(doc!, s, view).slice(0, contentHeight);
     const start = focused ? visibleStart : 0;
-    const total = focused ? list.length : doc!.tasks.filter((t) => t.status === s).length;
+    // The unfocused columns' counts respect the same filters as their contents,
+    // so "+N more" never promises rows the filter has already removed.
+    const total = focused ? list.length : tasksForTab(doc!, s, view).length;
     return (
       <Box
         key={s}
@@ -513,6 +684,7 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
               <Text bold={isSelected} color={isSelected ? THEME.accent : undefined}>
                 {task.title}
               </Text>
+              <PriorityMark priority={task.priority} />
             </Box>
           );
         })}
@@ -528,6 +700,8 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
     ['j/k', 'move'],
     ['tab', viewMode === 'list' ? 'board view' : 'list view'],
     ['/', 'filter'],
+    ['s', sortMode === 'file' ? 'sort by priority' : 'sort by file order'],
+    ['p', `priority: ${priorityFilterLabel(priorityFilter)}`],
     ['m', 'move task'],
     ['e', 'edit description'],
     ['r', 'reload'],
@@ -599,6 +773,24 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
             <Text dimColor>Filter </Text>
             <Text color={filterMode ? THEME.accent : undefined}>{query || '—'}</Text>
             {filterMode && <Text color={THEME.accent}>▏</Text>}
+            {/* Only shown once they're doing something: a line reading
+                "sort file · priority all" on every screen would be noise. */}
+            {sortMode === 'priority' && (
+              <>
+                <Text dimColor> · sort </Text>
+                <Text color={THEME.accent}>priority</Text>
+              </>
+            )}
+            {priorityFilter !== undefined && (
+              <>
+                <Text dimColor> · priority </Text>
+                <Text
+                  color={priorityFilter === 'NONE' ? THEME.accent : THEME.priority[priorityFilter]}
+                >
+                  {priorityFilterLabel(priorityFilter)}
+                </Text>
+              </>
+            )}
           </Box>
         )}
       </Box>
@@ -610,7 +802,13 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
         <Box marginTop={1} flexDirection="column" flexGrow={1} height={listHeight}>
           {list.length === 0 && (
             <Text dimColor>
-              {query.trim() ? `No matches for “${query}”.` : `Nothing in ${tab.toLowerCase()} yet.`}
+              {query.trim()
+                ? `No matches for “${query}”.`
+                : priorityFilter !== undefined
+                  ? // Naming the filter matters here: without it an empty list
+                    // reads as "this tab is empty" when really it's hidden.
+                    `Nothing in ${tab.toLowerCase()} at ${priorityFilterLabel(priorityFilter)} priority.`
+                  : `Nothing in ${tab.toLowerCase()} yet.`}
             </Text>
           )}
           {visible.map((task, i) => {
@@ -624,6 +822,7 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
                 <Text bold={isSelected} color={isSelected ? THEME.accent : undefined}>
                   {task.title}
                 </Text>
+                <PriorityMark priority={task.priority} />
               </Box>
             );
           })}
@@ -655,6 +854,12 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
               <Text color={THEME.status[activeTask.status]}>
                 {STATUS_PIP} {activeTask.status}
               </Text>
+              {activeTask.priority !== undefined && (
+                <Text color={THEME.priority[activeTask.priority]}>
+                  {' · '}
+                  {activeTask.priority}
+                </Text>
+              )}
               <Text dimColor> · created {activeTask.created}</Text>
               {activeTask.epicId !== undefined && (
                 <Text dimColor> · epic #{activeTask.epicId}</Text>
