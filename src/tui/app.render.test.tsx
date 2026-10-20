@@ -130,6 +130,13 @@ describe('App layout', () => {
     expect(rowsDrawn()).toBeLessThan(30);
   });
 
+  it('draws the description editor with the same rounded border as the panel', async () => {
+    await start(120, 30);
+    await press('e');
+    expect(frame()).toContain('╭');
+    expect(frame()).not.toContain('┌');
+  });
+
   it('scrolls the description once enter has focused the panel', async () => {
     await start(120, 30);
     await press(KEYS.enter);

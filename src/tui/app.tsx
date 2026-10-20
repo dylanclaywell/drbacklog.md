@@ -1087,7 +1087,7 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
           marginTop={1}
           flexDirection="column"
           height={editorHeight}
-          borderStyle="single"
+          borderStyle="round"
           borderColor={THEME.accent}
           paddingX={1}
         >
