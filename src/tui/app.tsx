@@ -88,6 +88,111 @@ export function selectionAfterChange(list: readonly Task[], id: number, previous
   return Math.max(0, Math.min(previous, list.length - 1));
 }
 
+// Matches a paragraph's lead-in: indentation plus a list marker, if any. Wrapped
+// lines of the paragraph hang under its text, the way a markdown list reads.
+const PARAGRAPH_LEAD = /^\s*(?:(?:[-*+]|\d+[.)])\s+)?/;
+
+/** Break one long line into pieces of at most `width`, without reflowing it. */
+function hardWrap(line: string, width: number): string[] {
+  const pieces: string[] = [];
+  for (let i = 0; i < line.length; i += width) pieces.push(line.slice(i, i + width));
+  return pieces.length > 0 ? pieces : [''];
+}
+
+/** Word-wrap one paragraph (one line of the source text) to `width`. */
+function wrapParagraph(paragraph: string, width: number): string[] {
+  let lead = PARAGRAPH_LEAD.exec(paragraph)?.[0] ?? '';
+  // A lead-in eating half the line leaves too little room to hang text under.
+  if (lead.length >= width / 2) lead = '';
+  const hang = ' '.repeat(lead.length);
+  const words = paragraph.slice(lead.length).split(/\s+/).filter(Boolean);
+
+  const lines: string[] = [];
+  let line = lead;
+  let empty = true; // no word on `line` yet
+  const breakLine = () => {
+    lines.push(line.trimEnd());
+    line = hang;
+    empty = true;
+  };
+  for (let word of words) {
+    while (word.length > 0) {
+      const sep = empty ? '' : ' ';
+      if (line.length + sep.length + word.length <= width) {
+        line += sep + word;
+        empty = false;
+        word = '';
+      } else if (empty) {
+        // Longer than a whole line (a URL, say): split it where it hits the edge.
+        const room = width - line.length;
+        line += word.slice(0, room);
+        word = word.slice(room);
+        breakLine();
+      } else {
+        breakLine();
+      }
+    }
+  }
+  if (!empty || lines.length === 0) lines.push(line.trimEnd());
+  return lines;
+}
+
+/**
+ * Word-wrap text to `width` columns, for the detail panel's own scrolling —
+ * Ink wraps text itself but never says where, so a scrolled window has to be
+ * cut from lines we wrapped. Each source line is wrapped separately and blank
+ * lines are kept, so paragraphs stay apart. Code (a ``` fence, or a line
+ * indented four spaces or a tab) is only cut at the edge, never reflowed,
+ * since its spacing carries meaning. Widths are counted in characters: a
+ * double-width character (CJK, most emoji) can make a line run long.
+ */
+export function wrapText(text: string, width: number): string[] {
+  const w = Math.max(1, width);
+  const out: string[] = [];
+  let inFence = false;
+  for (const line of text.split('\n')) {
+    const isFence = line.trimStart().startsWith('```');
+    if (inFence || isFence || /^( {4}|\t)/.test(line)) out.push(...hardWrap(line, w));
+    else if (line.trim() === '') out.push('');
+    else out.push(...wrapParagraph(line, w));
+    if (isFence) inFence = !inFence;
+  }
+  return out;
+}
+
+/** Where a task's details land in a panel of a given size. */
+export interface DetailLayout {
+  titleLines: string[];
+  /** The scrolling part: the description, then the resolution if there is one. */
+  bodyLines: string[];
+  /** Index in `bodyLines` where the resolution starts (its length if there's none). */
+  resolutionStart: number;
+  /** How many body lines fit at once. */
+  bodyRows: number;
+  /** The furthest the body can scroll, in lines. */
+  maxScroll: number;
+}
+
+/**
+ * Lay a task out in a `width` x `height` area: its title wrapped across as
+ * many rows as it needs, a status line and a blank row, then as much of the
+ * body as fits, with one row kept at the bottom for the "↓ N more" hint.
+ */
+export function detailLayout(task: Task, width: number, height: number): DetailLayout {
+  const titleLines = wrapText(`#${task.id} ${task.title}`, width);
+  const bodyLines = wrapText(task.description || '—', width);
+  const resolutionStart = bodyLines.length;
+  if (task.resolution) bodyLines.push('', ...wrapText(`Resolution: ${task.resolution}`, width));
+  const bodyRows = Math.max(1, height - titleLines.length - 2 - 1);
+  return {
+    titleLines,
+    bodyLines,
+    resolutionStart,
+    bodyRows,
+    maxScroll: Math.max(0, bodyLines.length - bodyRows),
+  };
+}
+
 /** Every field a task carries, compared by value. */
 export function sameTask(a: Task, b: Task): boolean {
   return (
@@ -156,6 +261,59 @@ const THEME = {
 function PriorityMark({ priority }: { priority: TaskPriority | undefined }): React.ReactElement {
   if (priority === undefined) return <></>;
   return <Text color={THEME.priority[priority]}> {priorityFor(priority).marker}</Text>;
+}
+
+/**
+ * A task's details, scrolled to `scroll`: the shared body of the side panel
+ * and the full-screen reader. Every row is one of `layout`'s pre-wrapped
+ * lines, so what's on screen matches what the scroll keys think is there.
+ */
+function DetailView({
+  task,
+  layout,
+  scroll,
+}: {
+  task: Task;
+  layout: DetailLayout;
+  scroll: number;
+}): React.ReactElement {
+  const top = Math.min(scroll, layout.maxScroll);
+  const shown = layout.bodyLines.slice(top, top + layout.bodyRows);
+  const below = layout.bodyLines.length - top - shown.length;
+  const hint = [top > 0 && `↑ ${top} above`, below > 0 && `↓ ${below} more`]
+    .filter(Boolean)
+    .join(' · ');
+  return (
+    <>
+      {layout.titleLines.map((line, i) => (
+        <Text key={i} bold>
+          {line}
+        </Text>
+      ))}
+      <Text wrap="truncate-end">
+        <Text color={THEME.status[task.status]}>
+          {STATUS_PIP} {task.status}
+        </Text>
+        {task.priority !== undefined && (
+          <Text color={THEME.priority[task.priority]}> · {task.priority}</Text>
+        )}
+        <Text dimColor> · created {task.created}</Text>
+        {task.epicId !== undefined && <Text dimColor> · epic #{task.epicId}</Text>}
+      </Text>
+      <Text> </Text>
+      <Box flexDirection="column" height={layout.bodyRows}>
+        {shown.map((line, i) => (
+          // An empty <Text> renders no row at all; a space keeps blank lines.
+          <Text key={top + i} dimColor={top + i >= layout.resolutionStart}>
+            {line || ' '}
+          </Text>
+        ))}
+      </Box>
+      <Box justifyContent="flex-end">
+        <Text dimColor>{hint || ' '}</Text>
+      </Box>
+    </>
+  );
 }
 
 /**
@@ -251,22 +409,31 @@ export function tasksForTab(doc: BacklogDocument, tab: TaskStatus, view: ViewOpt
 
 // Fixed-height chrome around the scrolling list — every other row on screen
 // — used to work out how many rows are left over for the list itself.
-const DETAIL_PANE_HEIGHT = 6;
 const TITLE_ROWS = 1 + 1 + 1; // wordmark+counts line, path line, hairline rule
 // The status tab bar only appears in list mode — board mode already shows
 // focus per-card, so the bar would be a redundant extra row there.
 const TAB_BAR_ROWS = 1 + 1; // margin above + content
 const FILTER_ROWS = 1 + 1;
 const LIST_MARGIN_ROWS = 1;
-const DETAIL_MARGIN_ROWS = 1;
 const FOOTER_ROWS = 1 + 1;
-const BASE_CHROME_HEIGHT =
-  TITLE_ROWS +
-  FILTER_ROWS +
-  LIST_MARGIN_ROWS +
-  DETAIL_MARGIN_ROWS +
-  DETAIL_PANE_HEIGHT +
-  FOOTER_ROWS;
+const BASE_CHROME_HEIGHT = TITLE_ROWS + FILTER_ROWS + LIST_MARGIN_ROWS + FOOTER_ROWS;
+
+// List view puts the selected task's details in a panel to the right of the
+// list. Narrower than this, the two would both be too cramped to read, so the
+// list keeps the full width and `enter` opens the full-screen reader instead —
+// the same thing board view does, which has no room for a panel at all.
+const MIN_PANEL_COLUMNS = 80;
+const PANEL_GAP = 1;
+/** The panel's border and padding: one column each side for both. */
+const PANEL_CHROME_COLUMNS = 4;
+const PANEL_CHROME_ROWS = 2;
+/** The full-screen reader's footer: margin + one row of key hints. */
+const READER_FOOTER_ROWS = 1 + 1;
+
+/** The list's share of a list-view row; the panel takes the rest. */
+function listColumnWidth(columns: number): number {
+  return Math.min(Math.max(Math.round(columns * 0.4), 30), 60);
+}
 
 export function App({ store, backlogPath }: AppProps): React.ReactElement {
   const { exit } = useApp();
@@ -282,6 +449,11 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
   const [moveCursor, setMoveCursor] = useState(0);
   const [priorityMode, setPriorityMode] = useState(false);
   const [priorityCursor, setPriorityCursor] = useState(0);
+  // `enter` on a task: in list view (when the panel fits) it focuses the
+  // details panel so the arrows scroll it; otherwise it opens the full-screen
+  // reader. Either way, `esc` hands the arrows back to the list.
+  const [reading, setReading] = useState(false);
+  const [detailScroll, setDetailScroll] = useState(0);
   const [editMode, setEditMode] = useState(false);
   const [editDraft, setEditDraft] = useState('');
   const [editCursor, setEditCursor] = useState(0);
@@ -341,6 +513,9 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
   const list = doc ? tasksForTab(doc, tab, view) : [];
   const activeTask = list[selected];
 
+  // A different task starts at its top, not wherever the last one was scrolled.
+  useEffect(() => setDetailScroll(0), [activeTask?.id]);
+
   // Called by the file watcher (below) once backlog.md has settled after a
   // change. Rebuilt every render so it sees the current selection and view;
   // the watcher reaches it through a ref so it isn't torn down and recreated
@@ -359,12 +534,14 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
         if (id === undefined) return;
         const list = tasksForTab(d, tab, view);
         setSelected(selectionAfterChange(list, id, previous));
-        // An open move/priority prompt names a task; if that task is gone
-        // from view, Enter would act on whatever slid under the cursor.
-        if ((moveMode || priorityMode) && !list.some((t) => t.id === id)) {
+        // An open move/priority prompt or reader names a task; if that task
+        // is gone from view, it would quietly swap to whatever slid under the
+        // cursor, and Enter in a prompt would act on that one.
+        if ((moveMode || priorityMode || reading) && !list.some((t) => t.id === id)) {
           setMoveMode(false);
           setPriorityMode(false);
-          setStatus(`#${id} changed on disk — prompt closed`);
+          setReading(false);
+          setStatus(`#${id} left this view after a change on disk — closed`);
         } else {
           setStatus('reloaded: backlog changed on disk');
         }
@@ -391,6 +568,25 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
   const maxStart = Math.max(0, list.length - contentHeight);
   const visibleStart = Math.min(Math.max(0, selected - contentHeight + 1), maxStart);
   const visible = list.slice(visibleStart, visibleStart + contentHeight);
+
+  const columns = stdout.columns || 80;
+  const showPanel = viewMode === 'list' && columns >= MIN_PANEL_COLUMNS;
+  const listWidth = showPanel ? listColumnWidth(columns) : columns;
+  const panelWidth = columns - listWidth - PANEL_GAP;
+  const fullScreenReader = reading && !showPanel;
+  // Laid out here, ahead of the input handler, so the scroll keys clamp and
+  // page by exactly what's drawn.
+  const detail = !activeTask
+    ? null
+    : fullScreenReader
+      ? detailLayout(activeTask, columns - 2, (stdout.rows || 24) - READER_FOOTER_ROWS)
+      : showPanel
+        ? detailLayout(
+            activeTask,
+            panelWidth - PANEL_CHROME_COLUMNS,
+            listHeight - PANEL_CHROME_ROWS,
+          )
+        : null;
 
   /**
    * Reload from disk, keeping the cursor on task `id` if it's still in view
@@ -622,12 +818,59 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
       return;
     }
 
+    if (reading) {
+      if (key.escape) {
+        setReading(false);
+        return;
+      }
+      const max = detail?.maxScroll ?? 0;
+      const page = detail?.bodyRows ?? 1;
+      // Clamp before adding too: a window resize can leave `s` past the new max.
+      const scrollBy = (n: number) =>
+        setDetailScroll((s) => Math.max(0, Math.min(Math.min(s, max) + n, max)));
+      if (input === 'k' || key.upArrow) {
+        scrollBy(-1);
+        return;
+      }
+      if (input === 'j' || key.downArrow) {
+        scrollBy(1);
+        return;
+      }
+      if (key.pageUp) {
+        scrollBy(-page);
+        return;
+      }
+      if (key.pageDown || input === ' ') {
+        scrollBy(page);
+        return;
+      }
+      if (input === 'g') {
+        setDetailScroll(0);
+        return;
+      }
+      if (input === 'G') {
+        setDetailScroll(max);
+        return;
+      }
+      // The move and priority prompts live above the list; the full-screen
+      // reader covers it, so step back out to where the prompt can be seen.
+      if ((input === 'm' || input === 'P') && fullScreenReader) setReading(false);
+      // These act on the task being read, through the shared handlers below.
+      // Everything else (switching tabs, filtering…) belongs to the list.
+      const passThrough = ['e', 'm', 'P', 'q'].includes(input) || (input === 'c' && key.ctrl);
+      if (!passThrough) return;
+    }
+
     if (input === 'q' || (input === 'c' && key.ctrl)) {
       exit();
       return;
     }
     if (input === '/') {
       setFilterMode(true);
+      return;
+    }
+    if (key.return && activeTask) {
+      setReading(true);
       return;
     }
     if (input === '1') {
@@ -801,7 +1044,7 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
 
   // Full-screen mode, same idea as swapping list<->board: editing a
   // description needs room to grow, so it claims the whole frame instead of
-  // squeezing into the fixed-height detail pane.
+  // squeezing into the details panel.
   if (editMode && editBase) {
     // Overlay the cursor on the character already there (like a real
     // terminal cursor) instead of inserting an extra glyph — inserting one
@@ -871,6 +1114,31 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
     );
   }
 
+  // Board view's (and a narrow terminal's) answer to the side panel: the task
+  // gets the whole frame, the same way the description editor does.
+  if (fullScreenReader && activeTask && detail) {
+    return (
+      <Box key="reader-screen" flexDirection="column" width={columns} height={stdout.rows}>
+        <Box flexDirection="column" paddingX={1}>
+          <DetailView task={activeTask} layout={detail} scroll={detailScroll} />
+        </Box>
+        <Box marginTop={1}>
+          <Text color={THEME.accent}>↑↓ j/k</Text>
+          <Text dimColor> scroll · </Text>
+          <Text color={THEME.accent}>pgup/pgdn</Text>
+          <Text dimColor> page · </Text>
+          <Text color={THEME.accent}>e</Text>
+          <Text dimColor> edit · </Text>
+          <Text color={THEME.accent}>m/P</Text>
+          <Text dimColor> move/priority · </Text>
+          <Text color={THEME.accent}>esc</Text>
+          <Text dimColor> back</Text>
+          {status && <Text dimColor> ▏ {status}</Text>}
+        </Box>
+      </Box>
+    );
+  }
+
   /** One board card. The focused column reuses the live-scrolling `visible` window; the other two just clip to what fits, since they have no selection to follow. */
   function renderCard(s: TaskStatus): React.ReactElement {
     const focused = s === tab;
@@ -923,19 +1191,31 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
     );
   }
 
-  const shortcuts: ReadonlyArray<readonly [string, string]> = [
-    ['←/→ 1/2/3', 'switch list'],
-    ['j/k', 'move'],
-    ['tab', viewMode === 'list' ? 'board view' : 'list view'],
-    ['/', 'filter'],
-    ['s', sortMode === 'file' ? 'sort by priority' : 'sort by file order'],
-    ['p', `priority: ${priorityFilterLabel(priorityFilter)}`],
-    ['m', 'move task'],
-    ['P', 'set priority'],
-    ['e', 'edit description'],
-    ['r', 'reload'],
-    ['q', 'quit'],
-  ];
+  // While the panel has focus only its keys do anything, so only they're shown.
+  const shortcuts: ReadonlyArray<readonly [string, string]> = reading
+    ? [
+        ['↑↓ j/k', 'scroll'],
+        ['pgup/pgdn', 'page'],
+        ['g/G', 'top/bottom'],
+        ['e', 'edit description'],
+        ['m', 'move task'],
+        ['P', 'set priority'],
+        ['esc', 'back to list'],
+      ]
+    : [
+        ['←/→ 1/2/3', 'switch list'],
+        ['j/k', 'move'],
+        ['enter', 'read'],
+        ['tab', viewMode === 'list' ? 'board view' : 'list view'],
+        ['/', 'filter'],
+        ['s', sortMode === 'file' ? 'sort by priority' : 'sort by file order'],
+        ['p', `priority: ${priorityFilterLabel(priorityFilter)}`],
+        ['m', 'move task'],
+        ['P', 'set priority'],
+        ['e', 'edit description'],
+        ['r', 'reload'],
+        ['q', 'quit'],
+      ];
 
   return (
     <Box key="main-screen" flexDirection="column" width={stdout.columns} height={stdout.rows}>
@@ -1050,79 +1330,64 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
           {STATUS_ORDER.map((s) => renderCard(s))}
         </Box>
       ) : (
-        <Box marginTop={1} flexDirection="column" flexGrow={1} height={listHeight}>
-          {list.length === 0 && (
-            <Text dimColor>
-              {query.trim()
-                ? `No matches for “${query}”.`
-                : priorityFilter !== undefined
-                  ? // Naming the filter matters here: without it an empty list
-                    // reads as "this tab is empty" when really it's hidden.
-                    `Nothing in ${tab.toLowerCase()} at ${priorityFilterLabel(priorityFilter)} priority.`
-                  : `Nothing in ${tab.toLowerCase()} yet.`}
-            </Text>
-          )}
-          {visible.map((task, i) => {
-            const isSelected = visibleStart + i === selected;
-            return (
-              <Box key={task.id}>
-                <Text color={isSelected ? THEME.accent : undefined}>
-                  {isSelected ? '▏ ' : '  '}
+        <Box marginTop={1} flexDirection="row" flexGrow={1} height={listHeight}>
+          <Box flexDirection="column" width={listWidth} height={listHeight}>
+            {list.length === 0 && (
+              <Text dimColor>
+                {query.trim()
+                  ? `No matches for “${query}”.`
+                  : priorityFilter !== undefined
+                    ? // Naming the filter matters here: without it an empty list
+                      // reads as "this tab is empty" when really it's hidden.
+                      `Nothing in ${tab.toLowerCase()} at ${priorityFilterLabel(priorityFilter)} priority.`
+                    : `Nothing in ${tab.toLowerCase()} yet.`}
+              </Text>
+            )}
+            {visible.map((task, i) => {
+              const isSelected = visibleStart + i === selected;
+              // One row per task, cut off at the column edge rather than
+              // wrapped: the scroll window counts rows, and the full title is
+              // in the panel anyway.
+              return (
+                <Text key={task.id} wrap="truncate-end">
+                  <Text color={isSelected ? THEME.accent : undefined}>
+                    {isSelected ? '▏ ' : '  '}
+                  </Text>
+                  <Text dimColor={!isSelected}>#{task.id} </Text>
+                  <Text bold={isSelected} color={isSelected ? THEME.accent : undefined}>
+                    {task.title}
+                  </Text>
+                  <PriorityMark priority={task.priority} />
                 </Text>
-                <Text dimColor={!isSelected}>#{task.id} </Text>
-                <Text bold={isSelected} color={isSelected ? THEME.accent : undefined}>
-                  {task.title}
-                </Text>
-                <PriorityMark priority={task.priority} />
-              </Box>
-            );
-          })}
-          {maxStart > 0 && (
-            <Text dimColor>
-              [{visibleStart + 1}-{Math.min(visibleStart + contentHeight, list.length)} of{' '}
-              {list.length}]
-            </Text>
+              );
+            })}
+            {maxStart > 0 && (
+              <Text dimColor>
+                [{visibleStart + 1}-{Math.min(visibleStart + contentHeight, list.length)} of{' '}
+                {list.length}]
+              </Text>
+            )}
+          </Box>
+          {showPanel && (
+            <Box
+              flexDirection="column"
+              marginLeft={PANEL_GAP}
+              width={panelWidth}
+              height={listHeight}
+              borderStyle="round"
+              borderColor={reading ? THEME.accent : THEME.rule}
+              borderDimColor={!reading}
+              paddingX={1}
+            >
+              {activeTask && detail ? (
+                <DetailView task={activeTask} layout={detail} scroll={detailScroll} />
+              ) : (
+                <Text dimColor>Nothing selected</Text>
+              )}
+            </Box>
           )}
         </Box>
       )}
-      <Box
-        marginTop={1}
-        flexDirection="column"
-        borderStyle="single"
-        borderTop={false}
-        borderRight={false}
-        borderBottom={false}
-        borderLeftColor={THEME.accent}
-        paddingLeft={1}
-        height={DETAIL_PANE_HEIGHT}
-      >
-        {activeTask ? (
-          <>
-            <Text bold>
-              #{activeTask.id} {activeTask.title}
-            </Text>
-            <Box>
-              <Text color={THEME.status[activeTask.status]}>
-                {STATUS_PIP} {activeTask.status}
-              </Text>
-              {activeTask.priority !== undefined && (
-                <Text color={THEME.priority[activeTask.priority]}>
-                  {' · '}
-                  {activeTask.priority}
-                </Text>
-              )}
-              <Text dimColor> · created {activeTask.created}</Text>
-              {activeTask.epicId !== undefined && (
-                <Text dimColor> · epic #{activeTask.epicId}</Text>
-              )}
-            </Box>
-            <Text>{activeTask.description || '—'}</Text>
-            {activeTask.resolution && <Text dimColor>Resolution: {activeTask.resolution}</Text>}
-          </>
-        ) : (
-          <Text dimColor>Nothing selected</Text>
-        )}
-      </Box>
       <Box marginTop={1} flexWrap="wrap">
         {shortcuts.map(([key, label]) => (
           <Box key={key} marginRight={2}>

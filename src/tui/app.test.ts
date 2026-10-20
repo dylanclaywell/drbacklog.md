@@ -11,6 +11,7 @@ import { join } from 'node:path';
 
 import {
   assertTaskUnchanged,
+  detailLayout,
   matchesPriorityFilter,
   PRIORITY_CHOICES,
   PRIORITY_FILTER_CYCLE,
@@ -19,6 +20,7 @@ import {
   selectionAfterChange,
   StaleTaskError,
   tasksForTab,
+  wrapText,
   type PriorityFilter,
   type ViewOptions,
 } from './app.js';
@@ -131,6 +133,82 @@ describe('selectionAfterChange', () => {
     const doc = seededDoc();
     const list = tasksForTab(doc, 'TODO', view()).slice(0, 3);
     expect(selectionAfterChange(list, 99, 3)).toBe(2);
+  });
+});
+
+describe('wrapText', () => {
+  it('breaks prose at word boundaries within the width', () => {
+    expect(wrapText('the quick brown fox jumps over', 10)).toEqual([
+      'the quick',
+      'brown fox',
+      'jumps over',
+    ]);
+  });
+
+  it('keeps paragraphs and the blank lines between them', () => {
+    expect(wrapText('first\n\nsecond', 20)).toEqual(['first', '', 'second']);
+  });
+
+  it('hangs a list item’s wrapped lines under its text', () => {
+    expect(wrapText('- one two three four', 10)).toEqual(['- one two', '  three', '  four']);
+    expect(wrapText('12. alpha beta gamma', 12)).toEqual(['12. alpha', '    beta', '    gamma']);
+  });
+
+  it('splits a word too long for any line', () => {
+    expect(wrapText('see https://example.com/a/long/path', 12)).toEqual([
+      'see',
+      'https://exam',
+      'ple.com/a/lo',
+      'ng/path',
+    ]);
+  });
+
+  it('cuts code at the edge without reflowing it', () => {
+    const fenced = '```\nif (x)   {  y();  }\n```';
+    expect(wrapText(fenced, 10)).toEqual(['```', 'if (x)   {', '  y();  }', '```']);
+    expect(wrapText('    keep   this   spacing', 40)).toEqual(['    keep   this   spacing']);
+  });
+
+  it('never returns a line longer than the width', () => {
+    const text = 'a markdown description\n- with a list item that runs long\n\nand more prose';
+    for (const width of [1, 5, 13, 40]) {
+      for (const line of wrapText(text, width)) expect(line.length).toBeLessThanOrEqual(width);
+    }
+  });
+});
+
+describe('detailLayout', () => {
+  const task = (overrides: Partial<Task> = {}): Task => ({
+    id: 7,
+    title: 'Fix login',
+    description: Array.from({ length: 20 }, (_, i) => `line ${i}`).join('\n'),
+    status: 'TODO',
+    created: '2026-10-20',
+    extraLines: [],
+    ...overrides,
+  });
+
+  it('gives the body whatever the title, status line, blank and hint rows leave', () => {
+    const layout = detailLayout(task(), 40, 10);
+    expect(layout.titleLines).toEqual(['#7 Fix login']);
+    expect(layout.bodyRows).toBe(10 - 1 - 2 - 1);
+    expect(layout.maxScroll).toBe(20 - layout.bodyRows);
+  });
+
+  it('takes a wrapped title’s extra rows out of the body', () => {
+    const layout = detailLayout(task({ title: 'a title long enough to wrap twice' }), 16, 10);
+    expect(layout.titleLines.length).toBe(3);
+    expect(layout.bodyRows).toBe(10 - 3 - 2 - 1);
+  });
+
+  it('does not scroll a body that fits', () => {
+    expect(detailLayout(task({ description: 'short' }), 40, 10).maxScroll).toBe(0);
+  });
+
+  it('appends the resolution after a blank line and marks where it starts', () => {
+    const layout = detailLayout(task({ description: 'done it', resolution: 'shipped' }), 40, 10);
+    expect(layout.bodyLines).toEqual(['done it', '', 'Resolution: shipped']);
+    expect(layout.resolutionStart).toBe(1);
   });
 });
 
