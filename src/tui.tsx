@@ -12,6 +12,7 @@ import { resolveBacklogLocation } from './discover.js';
 import { parseFileArg } from './cli.js';
 import { writeConfiguredPath } from './config.js';
 import { App } from './tui/app.js';
+import { flickerFreeStdout } from './tui/screen.js';
 import { promptForBacklogPath } from './tui/setup.js';
 
 // Enter the terminal's alternate screen buffer, same trick full-screen tools
@@ -64,6 +65,9 @@ async function main(): Promise<void> {
   await store.ensureInitialized();
 
   const { waitUntilExit } = render(React.createElement(App, { store, backlogPath }), {
+    // Only in a real terminal: the frame rewriting assumes a screen it owns.
+    // Piped output gets Ink's plain frames.
+    ...(process.stdout.isTTY ? { stdout: flickerFreeStdout(process.stdout) } : {}),
     exitOnCtrlC: false,
   });
   await waitUntilExit();
