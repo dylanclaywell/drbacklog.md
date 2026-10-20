@@ -277,6 +277,42 @@ To pin one shared file, add an `env` block to the server entry:
 
 The file is created with an empty skeleton on first run if it doesn't exist.
 
+## Terminal UI
+
+DrBacklog also has a terminal UI for browsing and triaging the backlog
+yourself. Run it from your project directory:
+
+```bash
+drbacklog-tui                                     # Option B (global install)
+node /absolute/path/to/drbacklog.md/dist/tui.js   # Option A (from source)
+npm run tui                                       # from a clone, without building
+```
+
+It finds the backlog the same way the server does (see
+[Where the backlog file lives](#where-the-backlog-file-lives)), and takes
+`--file <path>` to open a specific one (with `npm run tui`, pass it after `--`:
+`npm run tui -- --file docs/backlog.md`). The Windows note above applies here
+too: the shim is `drbacklog-tui.cmd`.
+
+You can keep it open while the AI works on the same file. The TUI reloads when
+the file changes on disk, and it won't save a change to a task that changed
+since it was shown: it reloads instead, and a description edit asks before
+overwriting.
+
+| Key              | Action                                                     |
+| ---------------- | ---------------------------------------------------------- |
+| `←`/`→`, `1`–`3` | Switch between TODO, DONE and CLOSED                       |
+| `j`/`k`, `↑`/`↓` | Move the selection                                         |
+| `tab`            | Toggle list and board view                                 |
+| `/`              | Fuzzy filter (`enter` keeps it, `esc` clears it)           |
+| `s`              | Sort by priority or by file order (view only)              |
+| `p`              | Filter by priority: all, each level, untriaged (view only) |
+| `m`              | Move the task to another status                            |
+| `P`              | Set or clear the task's priority                           |
+| `e`              | Edit the description (`ctrl+s` saves, `esc` discards)      |
+| `r`              | Reload from disk                                           |
+| `q`              | Quit                                                       |
+
 ## Tools
 
 | Tool                  | Description                                                |
