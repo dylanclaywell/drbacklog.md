@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.6.0](https://github.com/dylanclaywell/drbacklog.md/compare/drbacklog-v0.5.0...drbacklog-v0.6.0) (2026-10-20)
+
+
+### Features
+
+* **tui:** show task details in a scrollable side panel ([31a6177](https://github.com/dylanclaywell/drbacklog.md/commit/31a6177cc780470ec1fd96bb364b2da55086f251))
+
+
+### Bug Fixes
+
+* **tui:** keep every screen one row shorter than the terminal ([edfbe4c](https://github.com/dylanclaywell/drbacklog.md/commit/edfbe4ce980fad4ddc42714d346bd6be8b40168a))
+* **tui:** redraw only the lines that changed ([53be7e6](https://github.com/dylanclaywell/drbacklog.md/commit/53be7e6a0795ad09a276c9d0b999adc606dbcd07))
+
 ## [0.5.0](https://github.com/dylanclaywell/drbacklog.md/compare/drbacklog-v0.4.0...drbacklog-v0.5.0) (2026-10-20)
 
 
