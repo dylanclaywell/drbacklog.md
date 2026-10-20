@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.5.0](https://github.com/dylanclaywell/drbacklog.md/compare/drbacklog-v0.4.0...drbacklog-v0.5.0) (2026-10-20)
+
+
+### Features
+
+* add priority levels to tasks ([2a69fe3](https://github.com/dylanclaywell/drbacklog.md/commit/2a69fe306964761d6441f62c4a75f4c2d38c4a9c))
+* recover from missing or multiple backlog files ([ca920eb](https://github.com/dylanclaywell/drbacklog.md/commit/ca920eb8d80d60a2aa995ac88f11d03884fb03e2))
+* **tui:** refuse writes based on a stale view of a task ([78f82b6](https://github.com/dylanclaywell/drbacklog.md/commit/78f82b6d4a41c9b6a655a5ec78db39b46efd76ce))
+* **tui:** reload when backlog.md changes on disk ([3d7ba06](https://github.com/dylanclaywell/drbacklog.md/commit/3d7ba06528f62cc5dee18a263f8c8f94f311278d))
+* **tui:** set a task's priority from the TUI ([f39c918](https://github.com/dylanclaywell/drbacklog.md/commit/f39c918682f317632d26058a8c699e84b5ca98da))
+* **tui:** show, sort and filter tasks by priority ([e55d85c](https://github.com/dylanclaywell/drbacklog.md/commit/e55d85c324957e03cca885f0b844830005c4d17f))
+
+
+### Bug Fixes
+
+* **tui:** keep the cursor in range after moving a task ([2601414](https://github.com/dylanclaywell/drbacklog.md/commit/260141470de3aadd2b93cb09ba122f3a60b7abda))
+
 ## [0.4.0](https://github.com/dylanclaywell/drbacklog.md/compare/drbacklog-v0.3.0...drbacklog-v0.4.0) (2026-09-03)
 
 
