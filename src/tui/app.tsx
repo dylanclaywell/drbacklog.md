@@ -439,6 +439,11 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const { internal_eventEmitter: internalEventEmitter } = useStdin();
+  // Every screen is drawn one row shorter than the terminal. When a frame is
+  // as tall as the terminal, Ink stops updating it in place and instead clears
+  // the whole screen and repaints it on every render — which reads as the
+  // lower half of the screen flickering whenever anything changes.
+  const screenRows = Math.max((stdout.rows || 24) - 1, 1);
   const [doc, setDoc] = useState<BacklogDocument | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<TaskStatus>('TODO');
@@ -466,7 +471,7 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
   // editMode render branch below) — computed here too so page up/down in
   // the input handler can size a "page" the same way the box is sized. A
   // conflict notice takes two rows (margin + line) away from it.
-  const editorHeight = Math.max((stdout.rows || 24) - 6 - (editNotice ? 2 : 0), 3);
+  const editorHeight = Math.max(screenRows - 6 - (editNotice ? 2 : 0), 3);
   const editorContentRows = Math.max(editorHeight - 2, 1); // minus top/bottom border
   const [query, setQuery] = useState('');
   const [sortMode, setSortMode] = useState<SortMode>('file');
@@ -558,7 +563,7 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
   useEffect(() => watchBacklog(store.path, () => onDiskChange.current()), [store]);
 
   const chromeHeight = BASE_CHROME_HEIGHT + (viewMode === 'list' ? TAB_BAR_ROWS : 0);
-  const listHeight = Math.max((stdout.rows || 24) - chromeHeight, 3);
+  const listHeight = Math.max(screenRows - chromeHeight, 3);
   // Board cards spend a few of their assigned rows on a border and header, so
   // fewer rows are left for items than in the single-column list view.
   const contentHeight =
@@ -579,7 +584,7 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
   const detail = !activeTask
     ? null
     : fullScreenReader
-      ? detailLayout(activeTask, columns - 2, (stdout.rows || 24) - READER_FOOTER_ROWS)
+      ? detailLayout(activeTask, columns - 2, screenRows - READER_FOOTER_ROWS)
       : showPanel
         ? detailLayout(
             activeTask,
@@ -1056,7 +1061,7 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
     const cursorGlyph = cursorStandsOnCharacter ? atCursor : ' ';
     const cursorGlyphWidth = cursorStandsOnCharacter ? 1 : 0;
     return (
-      <Box key="edit-screen" flexDirection="column" width={stdout.columns} height={stdout.rows}>
+      <Box key="edit-screen" flexDirection="column" width={stdout.columns} height={screenRows}>
         <Box width={stdout.columns} justifyContent="space-between">
           <Box>
             <Text color={THEME.accent}>▍</Text>
@@ -1118,7 +1123,7 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
   // gets the whole frame, the same way the description editor does.
   if (fullScreenReader && activeTask && detail) {
     return (
-      <Box key="reader-screen" flexDirection="column" width={columns} height={stdout.rows}>
+      <Box key="reader-screen" flexDirection="column" width={columns} height={screenRows}>
         <Box flexDirection="column" paddingX={1}>
           <DetailView task={activeTask} layout={detail} scroll={detailScroll} />
         </Box>
@@ -1218,7 +1223,7 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
       ];
 
   return (
-    <Box key="main-screen" flexDirection="column" width={stdout.columns} height={stdout.rows}>
+    <Box key="main-screen" flexDirection="column" width={stdout.columns} height={screenRows}>
       <Box width={stdout.columns} justifyContent="space-between">
         <Box>
           <Text color={THEME.accent}>▍</Text>

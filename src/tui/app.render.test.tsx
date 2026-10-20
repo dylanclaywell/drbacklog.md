@@ -113,11 +113,21 @@ describe('App layout', () => {
     expect(frame()).toMatch(/↓ \d+ more/);
   });
 
-  it('never draws more rows than the terminal has', async () => {
+  // Not just "fits": a frame as tall as the terminal makes Ink clear and
+  // repaint the whole screen on every render instead of updating in place,
+  // which flickers. Every screen has to stay at least one row short.
+  it('draws every screen at least one row shorter than the terminal', async () => {
     await start(120, 30);
-    expect(lines().length).toBeLessThanOrEqual(30);
-    await press(KEYS.enter, KEYS.down, KEYS.down);
-    expect(lines().length).toBeLessThanOrEqual(30);
+    const rowsDrawn = () => frame().replace(/\n$/, '').split('\n').length;
+    expect(rowsDrawn()).toBeLessThan(30);
+    await press(KEYS.enter, KEYS.down, KEYS.down); // focused panel
+    expect(rowsDrawn()).toBeLessThan(30);
+    await press(KEYS.escape, 'e'); // description editor
+    expect(frame()).toContain('Editing #1');
+    expect(rowsDrawn()).toBeLessThan(30);
+    await press(KEYS.escape, KEYS.tab, KEYS.enter); // full-screen reader
+    expect(frame()).toContain('esc back');
+    expect(rowsDrawn()).toBeLessThan(30);
   });
 
   it('scrolls the description once enter has focused the panel', async () => {
