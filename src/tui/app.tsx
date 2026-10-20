@@ -4,7 +4,7 @@
 // behavior never diverges from tool behavior.
 
 import { Box, Text, useApp, useInput, useStdin, useStdout } from 'ink';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   compareByPriority,
@@ -16,8 +16,10 @@ import {
 } from '../operations.js';
 import type { BacklogDocument, Task, TaskPriority, TaskStatus } from '../model.js';
 import { PRIORITIES, priorityFor, SECTIONS } from '../model.js';
+import { render as renderBacklog } from '../render.js';
 import { LegacyFormatError } from '../store.js';
 import type { BacklogStore } from '../store.js';
+import { watchBacklog } from './watch.js';
 
 export interface AppProps {
   store: BacklogStore;
@@ -338,6 +340,45 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
   const view: ViewOptions = { query, priorityFilter, sortMode };
   const list = doc ? tasksForTab(doc, tab, view) : [];
   const activeTask = list[selected];
+
+  // Called by the file watcher (below) once backlog.md has settled after a
+  // change. Rebuilt every render so it sees the current selection and view;
+  // the watcher reaches it through a ref so it isn't torn down and recreated
+  // on every keystroke.
+  const onDiskChange = useRef<() => void>(() => undefined);
+  onDiskChange.current = () => {
+    const id = activeTask?.id;
+    const previous = selected;
+    store
+      .load()
+      .then((d) => {
+        // The TUI's own writes trigger the watcher too, but by then it has
+        // already reloaded — same content, so nothing to do or announce.
+        if (doc && renderBacklog(d) === renderBacklog(doc)) return;
+        setDoc(d);
+        if (id === undefined) return;
+        const list = tasksForTab(d, tab, view);
+        setSelected(selectionAfterChange(list, id, previous));
+        // An open move/priority prompt names a task; if that task is gone
+        // from view, Enter would act on whatever slid under the cursor.
+        if ((moveMode || priorityMode) && !list.some((t) => t.id === id)) {
+          setMoveMode(false);
+          setPriorityMode(false);
+          setStatus(`#${id} changed on disk — prompt closed`);
+        } else {
+          setStatus('reloaded: backlog changed on disk');
+        }
+      })
+      .catch((err: unknown) => {
+        // A legacy file is a real state to show. Anything else is most likely
+        // a read racing another writer; keep the current view, and the next
+        // change (or `r`) will try again.
+        if (err instanceof LegacyFormatError) handleError(err);
+        else setStatus(`couldn't reload after a change on disk: ${String(err)}`);
+      });
+  };
+
+  useEffect(() => watchBacklog(store.path, () => onDiskChange.current()), [store]);
 
   const chromeHeight = BASE_CHROME_HEIGHT + (viewMode === 'list' ? TAB_BAR_ROWS : 0);
   const listHeight = Math.max((stdout.rows || 24) - chromeHeight, 3);
