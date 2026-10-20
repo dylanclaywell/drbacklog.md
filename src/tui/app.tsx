@@ -11,6 +11,7 @@ import {
   findTasks,
   moveTask,
   setTaskPriority,
+  TaskNotFoundError,
   updateTask,
 } from '../operations.js';
 import type { BacklogDocument, Task, TaskPriority, TaskStatus } from '../model.js';
@@ -83,6 +84,44 @@ export function selectionAfterChange(list: readonly Task[], id: number, previous
   const index = list.findIndex((t) => t.id === id);
   if (index !== -1) return index;
   return Math.max(0, Math.min(previous, list.length - 1));
+}
+
+/** Every field a task carries, compared by value. */
+export function sameTask(a: Task, b: Task): boolean {
+  return (
+    a.id === b.id &&
+    a.title === b.title &&
+    a.description === b.description &&
+    a.status === b.status &&
+    a.created === b.created &&
+    a.resolution === b.resolution &&
+    a.epicId === b.epicId &&
+    a.priority === b.priority &&
+    a.extraLines.length === b.extraLines.length &&
+    a.extraLines.every((line, i) => line === b.extraLines[i])
+  );
+}
+
+/** The task on disk no longer matches the one the TUI showed when the change was asked for. */
+export class StaleTaskError extends Error {
+  constructor(public readonly current: Task) {
+    super(`#${current.id} changed on disk`);
+    this.name = 'StaleTaskError';
+  }
+}
+
+/**
+ * Guard for a TUI write, run inside `store.mutate` so it sees the file as it
+ * is right now. The TUI's copy of the backlog can be stale — an agent or an
+ * editor may have changed the file since the last load — and a change made
+ * from a stale screen could undo theirs (a description save) or land on a
+ * different task that has since taken the same id. Throwing here aborts the
+ * mutate before anything is written.
+ */
+export function assertTaskUnchanged(doc: BacklogDocument, seen: Task): void {
+  const current = doc.tasks.find((t) => t.id === seen.id);
+  if (!current) throw new TaskNotFoundError(seen.id);
+  if (!sameTask(current, seen)) throw new StaleTaskError(current);
 }
 
 // A small, deliberately narrow palette: one accent color owns focus/selection
@@ -231,11 +270,6 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const { internal_eventEmitter: internalEventEmitter } = useStdin();
-  // Height of the full-screen description editor's bordered box (see the
-  // editMode render branch below) — computed here too so page up/down in
-  // the input handler can size a "page" the same way the box is sized.
-  const editorHeight = Math.max((stdout.rows || 24) - 6, 3);
-  const editorContentRows = Math.max(editorHeight - 2, 1); // minus top/bottom border
   const [doc, setDoc] = useState<BacklogDocument | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<TaskStatus>('TODO');
@@ -249,6 +283,17 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
   const [editMode, setEditMode] = useState(false);
   const [editDraft, setEditDraft] = useState('');
   const [editCursor, setEditCursor] = useState(0);
+  // The task as it stood when editing began. The editor works from this, not
+  // `activeTask`: a reload while it's open could put a different task under
+  // the cursor, and the save has to be checked against what the draft started from.
+  const [editBase, setEditBase] = useState<Task | null>(null);
+  const [editNotice, setEditNotice] = useState('');
+  // Height of the full-screen description editor's bordered box (see the
+  // editMode render branch below) — computed here too so page up/down in
+  // the input handler can size a "page" the same way the box is sized. A
+  // conflict notice takes two rows (margin + line) away from it.
+  const editorHeight = Math.max((stdout.rows || 24) - 6 - (editNotice ? 2 : 0), 3);
+  const editorContentRows = Math.max(editorHeight - 2, 1); // minus top/bottom border
   const [query, setQuery] = useState('');
   const [sortMode, setSortMode] = useState<SortMode>('file');
   const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>(undefined);
@@ -306,60 +351,109 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
   const visibleStart = Math.min(Math.max(0, selected - contentHeight + 1), maxStart);
   const visible = list.slice(visibleStart, visibleStart + contentHeight);
 
+  /**
+   * Reload from disk, keeping the cursor on task `id` if it's still in view
+   * (a priority sort may have moved it) or on its old row if not (a move or
+   * a filter may have taken it out of this tab).
+   */
+  const reloadKeeping = useCallback(
+    (id: number, previous: number) =>
+      store.load().then((d) => {
+        setDoc(d);
+        setSelected(selectionAfterChange(tasksForTab(d, tab, view), id, previous));
+      }),
+    [store, tab, query, priorityFilter, sortMode],
+  );
+
+  /**
+   * Apply a change to the selected task, but only if the task on disk is still
+   * the one on screen (see `assertTaskUnchanged`). If it isn't, nothing is
+   * written: the TUI reloads and says why, so you act on what's really there.
+   */
+  const changeTask = useCallback(
+    (seen: Task, change: (d: BacklogDocument) => unknown, done: string) => {
+      const previous = selected;
+      store
+        .mutate((d) => {
+          assertTaskUnchanged(d, seen);
+          change(d);
+        })
+        .then(() => reloadKeeping(seen.id, previous))
+        .then(() => setStatus(done))
+        .catch((err: unknown) => {
+          if (err instanceof StaleTaskError) {
+            setStatus(`#${seen.id} changed on disk — reloaded, nothing saved`);
+          } else if (err instanceof TaskNotFoundError) {
+            setStatus(`#${seen.id} no longer exists — reloaded`);
+          } else {
+            handleError(err);
+            return;
+          }
+          reloadKeeping(seen.id, previous).catch(handleError);
+        });
+    },
+    [selected, store, reloadKeeping, handleError],
+  );
+
   const applyMove = useCallback(
     (to: TaskStatus) => {
       if (!activeTask) return;
       const id = activeTask.id;
-      const previous = selected;
       setMoveMode(false);
-      store
-        .mutate((d) => moveTask(d, { id, status: to }))
-        .then(() => store.load())
-        .then((d) => {
-          setDoc(d);
-          // The moved task has usually left this tab, so the cursor holds its
-          // row — clamped, in case it was the last one.
-          setSelected(selectionAfterChange(tasksForTab(d, tab, view), id, previous));
-          setStatus(`#${id} -> ${to}`);
-        })
-        .catch(handleError);
+      changeTask(activeTask, (d) => moveTask(d, { id, status: to }), `#${id} -> ${to}`);
     },
-    [activeTask, selected, store, tab, query, priorityFilter, sortMode],
+    [activeTask, changeTask],
   );
 
   const applyPriority = useCallback(
     (choice: PriorityChoice) => {
       if (!activeTask) return;
       const id = activeTask.id;
-      const previous = selected;
       const priority = choice === 'NONE' ? undefined : choice;
       setPriorityMode(false);
-      store
-        .mutate((d) => setTaskPriority(d, { id, priority }))
-        .then(() => store.load())
-        .then((d) => {
-          setDoc(d);
-          setSelected(selectionAfterChange(tasksForTab(d, tab, view), id, previous));
-          setStatus(`#${id} priority -> ${priority ?? 'none'}`);
-        })
-        .catch(handleError);
+      changeTask(
+        activeTask,
+        (d) => setTaskPriority(d, { id, priority }),
+        `#${id} priority -> ${priority ?? 'none'}`,
+      );
     },
-    [activeTask, selected, store, tab, query, priorityFilter, sortMode],
+    [activeTask, changeTask],
   );
 
+  // Not `changeTask`: when the description changed on disk, reloading would
+  // throw away what was typed. The editor stays open with the draft intact,
+  // and its base moves to the version on disk, so a second ctrl+s overwrites
+  // that version knowingly instead of by accident.
   const saveEdit = useCallback(() => {
-    if (!activeTask) return;
-    const id = activeTask.id;
+    if (!editBase) return;
+    const base = editBase;
+    const id = base.id;
     const value = editDraft;
-    setEditMode(false);
+    const previous = selected;
     store
-      .mutate((d) => updateTask(d, { id, field: 'description', value }))
-      .then(() => {
-        setStatus(`#${id} description updated`);
-        reload();
+      .mutate((d) => {
+        assertTaskUnchanged(d, base);
+        updateTask(d, { id, field: 'description', value });
       })
-      .catch(handleError);
-  }, [activeTask, editDraft, store, reload]);
+      .then(() => {
+        setEditMode(false);
+        setStatus(`#${id} description updated`);
+        return reloadKeeping(id, previous);
+      })
+      .catch((err: unknown) => {
+        if (err instanceof StaleTaskError) {
+          setEditBase(err.current);
+          setEditNotice(
+            `#${id} changed on disk since you started editing. ` +
+              'ctrl+s again overwrites it with your draft · esc discards your draft',
+          );
+        } else if (err instanceof TaskNotFoundError) {
+          setEditNotice(`#${id} was deleted on disk, so this can't be saved · esc discards`);
+        } else {
+          handleError(err);
+        }
+      });
+  }, [editBase, editDraft, selected, store, reloadKeeping, handleError]);
 
   useInput((input, key) => {
     // The migration confirm owns every key while it's up: nothing else can be
@@ -577,6 +671,8 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
       return;
     }
     if (input === 'e' && activeTask) {
+      setEditBase(activeTask);
+      setEditNotice('');
       setEditDraft(activeTask.description);
       setEditCursor(activeTask.description.length);
       setEditMode(true);
@@ -665,7 +761,7 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
   // Full-screen mode, same idea as swapping list<->board: editing a
   // description needs room to grow, so it claims the whole frame instead of
   // squeezing into the fixed-height detail pane.
-  if (editMode && activeTask) {
+  if (editMode && editBase) {
     // Overlay the cursor on the character already there (like a real
     // terminal cursor) instead of inserting an extra glyph — inserting one
     // shoves the rest of the line sideways as the cursor moves through it.
@@ -680,12 +776,12 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
         <Box width={stdout.columns} justifyContent="space-between">
           <Box>
             <Text color={THEME.accent}>▍</Text>
-            <Text bold> Editing #{activeTask.id} </Text>
-            <Text dimColor>{activeTask.title}</Text>
+            <Text bold> Editing #{editBase.id} </Text>
+            <Text dimColor>{editBase.title}</Text>
           </Box>
           <Box>
-            <Text color={THEME.status[activeTask.status]}>
-              {STATUS_PIP} {activeTask.status}
+            <Text color={THEME.status[editBase.status]}>
+              {STATUS_PIP} {editBase.status}
             </Text>
           </Box>
         </Box>
@@ -712,6 +808,12 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
             {editDraft.slice(editCursor + cursorGlyphWidth)}
           </Text>
         </Box>
+        {editNotice && (
+          <Box marginTop={1}>
+            <Text color={THEME.priority.MEDIUM}>▍ </Text>
+            <Text>{editNotice}</Text>
+          </Box>
+        )}
         <Box marginTop={1}>
           <Text color={THEME.accent}>↑↓←→</Text>
           <Text dimColor> move · </Text>

@@ -4,20 +4,33 @@
 // Ink tree. The central guarantee is that none of this mutates the document —
 // sorting and filtering in the TUI must never reach backlog.md.
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
+  assertTaskUnchanged,
   matchesPriorityFilter,
   PRIORITY_CHOICES,
   PRIORITY_FILTER_CYCLE,
   priorityFilterLabel,
+  sameTask,
   selectionAfterChange,
+  StaleTaskError,
   tasksForTab,
   type PriorityFilter,
   type ViewOptions,
 } from './app.js';
-import { addTask } from '../operations.js';
-import { createEmptyDocument } from '../store.js';
+import {
+  addTask,
+  moveTask,
+  removeTask,
+  setTaskPriority,
+  TaskNotFoundError,
+  updateTask,
+} from '../operations.js';
+import { BacklogStore, createEmptyDocument } from '../store.js';
 import type { BacklogDocument, Task, TaskPriority } from '../model.js';
 
 /** Four TODO tasks added out of rank order, one deliberately untriaged. */
@@ -118,6 +131,123 @@ describe('selectionAfterChange', () => {
     const doc = seededDoc();
     const list = tasksForTab(doc, 'TODO', view()).slice(0, 3);
     expect(selectionAfterChange(list, 99, 3)).toBe(2);
+  });
+});
+
+describe('sameTask', () => {
+  const base = (): Task => seededDoc().tasks[0]!;
+
+  it('treats an identical task as unchanged', () => {
+    expect(sameTask(base(), base())).toBe(true);
+  });
+
+  it('notices a change to any field, including the optional ones', () => {
+    const changed: Array<(t: Task) => void> = [
+      (t) => (t.title = 'other'),
+      (t) => (t.description = 'other'),
+      (t) => (t.status = 'DONE'),
+      (t) => (t.created = '2026-01-01'),
+      (t) => (t.resolution = 'shipped'),
+      (t) => (t.epicId = 1),
+      (t) => delete t.priority,
+      (t) => t.extraLines.push('* **Owner:** someone'),
+    ];
+    for (const change of changed) {
+      const t = base();
+      change(t);
+      expect(sameTask(base(), t)).toBe(false);
+    }
+  });
+});
+
+// Two stores on one file stand in for the TUI and the MCP server: separate
+// processes, each holding its own BacklogStore, so neither one's lock covers
+// the other — exactly the situation the guard exists for.
+describe('assertTaskUnchanged against a file changed elsewhere', () => {
+  let dir: string;
+  let file: string;
+  let tui: BacklogStore;
+  let agent: BacklogStore;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'drbacklog-tui-'));
+    file = join(dir, 'backlog.md');
+    tui = new BacklogStore(file);
+    agent = new BacklogStore(file);
+    await agent.mutate((d) => {
+      addTask(d, { title: 'first', description: 'original', created: '2026-10-20' });
+      addTask(d, { title: 'second', description: '', created: '2026-10-20' });
+    });
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  /** What the TUI is showing for task `id`, as of its last load. */
+  async function seen(id: number): Promise<Task> {
+    return (await tui.load()).tasks.find((t) => t.id === id)!;
+  }
+
+  it('lets the change through when the task is as the TUI saw it', async () => {
+    const task = await seen(1);
+    // An unrelated change elsewhere in the file doesn't block it.
+    await agent.mutate((d) => setTaskPriority(d, { id: 2, priority: 'LOW' }));
+
+    await tui.mutate((d) => {
+      assertTaskUnchanged(d, task);
+      moveTask(d, { id: 1, status: 'DONE' });
+    });
+
+    const after = await agent.load();
+    expect(after.tasks.find((t) => t.id === 1)!.status).toBe('DONE');
+    expect(after.tasks.find((t) => t.id === 2)!.priority).toBe('LOW');
+  });
+
+  it("refuses a description save that would overwrite someone else's edit", async () => {
+    const task = await seen(1);
+    await agent.mutate((d) => updateTask(d, { id: 1, field: 'description', value: 'theirs' }));
+    const before = await readFile(file, 'utf8');
+
+    const save = tui.mutate((d) => {
+      assertTaskUnchanged(d, task);
+      updateTask(d, { id: 1, field: 'description', value: 'mine' });
+    });
+
+    const err = await save.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StaleTaskError);
+    // It carries the version on disk, so the editor can rebase onto it.
+    expect((err as StaleTaskError).current.description).toBe('theirs');
+    expect(await readFile(file, 'utf8')).toBe(before);
+  });
+
+  it('refuses a change to an id that now belongs to a different task', async () => {
+    const task = await seen(2);
+    // nextId is highest + 1, so deleting #2 and adding a task reuses its id.
+    await agent.mutate((d) => {
+      removeTask(d, 2);
+      addTask(d, { title: 'someone else', description: '', created: '2026-10-20' });
+    });
+
+    const move = tui.mutate((d) => {
+      assertTaskUnchanged(d, task);
+      moveTask(d, { id: 2, status: 'CLOSED' });
+    });
+
+    await expect(move).rejects.toBeInstanceOf(StaleTaskError);
+    expect((await agent.load()).tasks.find((t) => t.id === 2)!.status).toBe('TODO');
+  });
+
+  it('reports a task deleted elsewhere as not found', async () => {
+    const task = await seen(1);
+    await agent.mutate((d) => removeTask(d, 1));
+
+    const move = tui.mutate((d) => {
+      assertTaskUnchanged(d, task);
+      moveTask(d, { id: 1, status: 'DONE' });
+    });
+
+    await expect(move).rejects.toBeInstanceOf(TaskNotFoundError);
   });
 });
 
