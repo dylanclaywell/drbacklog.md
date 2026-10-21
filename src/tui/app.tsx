@@ -565,9 +565,14 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
   const chromeHeight = BASE_CHROME_HEIGHT + (viewMode === 'list' ? TAB_BAR_ROWS : 0);
   const listHeight = Math.max(screenRows - chromeHeight, 3);
   // Board cards spend a few of their assigned rows on a border and header, so
-  // fewer rows are left for items than in the single-column list view.
+  // fewer rows are left for items than in the single-column list view. A list
+  // too long to fit gives up a row to its "[1-N of M]" line.
   const contentHeight =
-    viewMode === 'board' ? Math.max(listHeight - CARD_CHROME_ROWS, 1) : listHeight;
+    viewMode === 'board'
+      ? Math.max(listHeight - CARD_CHROME_ROWS, 1)
+      : list.length > listHeight
+        ? Math.max(listHeight - 1, 1)
+        : listHeight;
   // Keep the selected row inside the visible window, scrolling the minimum
   // amount needed rather than always centering.
   const maxStart = Math.max(0, list.length - contentHeight);
