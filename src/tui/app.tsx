@@ -430,9 +430,36 @@ const PANEL_CHROME_ROWS = 2;
 /** The full-screen reader's footer: margin + one row of key hints. */
 const READER_FOOTER_ROWS = 1 + 1;
 
-/** The list's share of a list-view row; the panel takes the rest. */
-function listColumnWidth(columns: number): number {
-  return Math.min(Math.max(Math.round(columns * 0.4), 30), 60);
+/**
+ * The list's share of a list-view row, in percent; the panel takes the rest.
+ * `[` and `]` step it by LIST_SHARE_STEP within these bounds. Kept as a share
+ * rather than a column count so a terminal resize keeps the proportion.
+ */
+export const DEFAULT_LIST_SHARE = 40;
+export const MIN_LIST_SHARE = 20;
+export const MAX_LIST_SHARE = 80;
+export const LIST_SHARE_STEP = 10;
+/** Narrower than this, either side is too cramped to read whatever the share says. */
+const MIN_LIST_COLUMNS = 30;
+const MIN_DETAIL_COLUMNS = 30;
+
+/** The list's width for a list-view row of `columns` at `share` percent. */
+export function listColumnWidth(columns: number, share: number): number {
+  const max = Math.max(columns - PANEL_GAP - MIN_DETAIL_COLUMNS, MIN_LIST_COLUMNS);
+  return Math.min(Math.max(Math.round((columns * share) / 100), MIN_LIST_COLUMNS), max);
+}
+
+/**
+ * The share one step from `share` in direction `by` (+1 widens the list), or
+ * undefined when that step is out of bounds or wouldn't change the width at
+ * this terminal size — a press that can't visibly do anything shouldn't move
+ * the share either, or the next press the other way would seem to do nothing.
+ */
+export function stepListShare(columns: number, share: number, by: 1 | -1): number | undefined {
+  const next = share + by * LIST_SHARE_STEP;
+  if (next < MIN_LIST_SHARE || next > MAX_LIST_SHARE) return undefined;
+  if (listColumnWidth(columns, next) === listColumnWidth(columns, share)) return undefined;
+  return next;
 }
 
 export function App({ store, backlogPath }: AppProps): React.ReactElement {
@@ -476,6 +503,9 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
   const [query, setQuery] = useState('');
   const [sortMode, setSortMode] = useState<SortMode>('file');
   const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>(undefined);
+  // Only for this session: saving it would mean deciding whether it's a
+  // per-backlog or a per-user setting.
+  const [listShare, setListShare] = useState(DEFAULT_LIST_SHARE);
   const [status, setStatus] = useState<string>('');
   // True while the file is in the pre-rename format and the user hasn't yet
   // said whether to migrate it. Its own screen, not an error: it's answerable.
@@ -581,7 +611,7 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
 
   const columns = stdout.columns || 80;
   const showPanel = viewMode === 'list' && columns >= MIN_PANEL_COLUMNS;
-  const listWidth = showPanel ? listColumnWidth(columns) : columns;
+  const listWidth = showPanel ? listColumnWidth(columns, listShare) : columns;
   const panelWidth = columns - listWidth - PANEL_GAP;
   const fullScreenReader = reading && !showPanel;
   // Laid out here, ahead of the input handler, so the scroll keys clamp and
@@ -867,7 +897,8 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
       if ((input === 'm' || input === 'P') && fullScreenReader) setReading(false);
       // These act on the task being read, through the shared handlers below.
       // Everything else (switching tabs, filtering…) belongs to the list.
-      const passThrough = ['e', 'm', 'P', 'q'].includes(input) || (input === 'c' && key.ctrl);
+      const passThrough =
+        ['e', 'm', 'P', 'q', '[', ']'].includes(input) || (input === 'c' && key.ctrl);
       if (!passThrough) return;
     }
 
@@ -954,6 +985,18 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
       setPriorityFilter(next);
       setSelected(0);
       setStatus(`priority filter: ${priorityFilterLabel(next)}`);
+      return;
+    }
+    // Only the list and the panel beside it have a split to change; board view
+    // and a narrow terminal have no panel, so there's nothing to resize.
+    if ((input === '[' || input === ']') && showPanel) {
+      const next = stepListShare(columns, listShare, input === ']' ? 1 : -1);
+      if (next === undefined) {
+        setStatus(input === ']' ? 'list is as wide as it goes' : 'list is as narrow as it goes');
+        return;
+      }
+      setListShare(next);
+      setStatus(`list ${next}% · panel ${100 - next}%`);
       return;
     }
     if (input === 'r') {

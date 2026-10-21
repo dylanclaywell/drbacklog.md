@@ -11,14 +11,19 @@ import { join } from 'node:path';
 
 import {
   assertTaskUnchanged,
+  DEFAULT_LIST_SHARE,
   detailLayout,
+  listColumnWidth,
   matchesPriorityFilter,
+  MAX_LIST_SHARE,
+  MIN_LIST_SHARE,
   PRIORITY_CHOICES,
   PRIORITY_FILTER_CYCLE,
   priorityFilterLabel,
   sameTask,
   selectionAfterChange,
   StaleTaskError,
+  stepListShare,
   tasksForTab,
   wrapText,
   type PriorityFilter,
@@ -133,6 +138,37 @@ describe('selectionAfterChange', () => {
     const doc = seededDoc();
     const list = tasksForTab(doc, 'TODO', view()).slice(0, 3);
     expect(selectionAfterChange(list, 99, 3)).toBe(2);
+  });
+});
+
+describe('listColumnWidth', () => {
+  it('gives the list its share of the row', () => {
+    expect(listColumnWidth(200, 40)).toBe(80);
+    expect(listColumnWidth(200, 70)).toBe(140);
+  });
+
+  it('keeps both sides wide enough to read', () => {
+    expect(listColumnWidth(80, MIN_LIST_SHARE)).toBe(30);
+    expect(listColumnWidth(80, MAX_LIST_SHARE)).toBe(80 - 1 - 30);
+  });
+});
+
+describe('stepListShare', () => {
+  it('steps the share by ten points either way', () => {
+    expect(stepListShare(200, DEFAULT_LIST_SHARE, 1)).toBe(50);
+    expect(stepListShare(200, DEFAULT_LIST_SHARE, -1)).toBe(30);
+  });
+
+  it('stops at the bounds', () => {
+    expect(stepListShare(200, MAX_LIST_SHARE, 1)).toBeUndefined();
+    expect(stepListShare(200, MIN_LIST_SHARE, -1)).toBeUndefined();
+  });
+
+  it("won't take a step the terminal is too narrow to show", () => {
+    // At 80 columns the list is already held to 30 at 30%, so 20% looks the same.
+    expect(stepListShare(80, 30, -1)).toBeUndefined();
+    // And the panel's minimum caps the list at 49, which 70% already reaches.
+    expect(stepListShare(80, 70, 1)).toBeUndefined();
   });
 });
 

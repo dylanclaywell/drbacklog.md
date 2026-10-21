@@ -183,6 +183,23 @@ describe('App layout', () => {
     expect(selectedId()).toBe(1);
   });
 
+  it('widens and narrows the list beside the panel', async () => {
+    await start(120, 30);
+    // The panel's left border sits one column past the end of the list.
+    const panelColumn = () =>
+      lines()
+        .find((l) => l.includes('#2 Short one'))
+        ?.indexOf('│');
+    const before = panelColumn() ?? 0;
+    await press(']');
+    expect(frame()).toContain('list 50% · panel 50%');
+    expect(panelColumn()).toBe(before + 12);
+    // Still works while the panel has focus.
+    await press(KEYS.enter, '[', '[');
+    expect(frame()).toContain('list 30% · panel 70%');
+    expect(panelColumn()).toBe(before - 12);
+  });
+
   it('starts the next task at its top', async () => {
     await start(120, 30);
     await press(KEYS.enter, KEYS.down, KEYS.down, KEYS.escape, KEYS.down);

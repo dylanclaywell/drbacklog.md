@@ -307,6 +307,7 @@ overwriting.
 | `home`/`end`     | Jump to the first or last task                             |
 | `enter`          | Read the task (see below)                                  |
 | `tab`            | Toggle list and board view                                 |
+| `[`/`]`          | Narrow or widen the list beside the details panel          |
 | `/`              | Fuzzy filter (`enter` keeps it, `esc` clears it)           |
 | `s`              | Sort by priority or by file order (view only)              |
 | `p`              | Filter by priority: all, each level, untriaged (view only) |
