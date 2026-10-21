@@ -303,6 +303,8 @@ overwriting.
 | ---------------- | ---------------------------------------------------------- |
 | `←`/`→`, `1`–`3` | Switch between TODO, DONE and CLOSED                       |
 | `j`/`k`, `↑`/`↓` | Move the selection                                         |
+| `pgup`/`pgdn`    | Move the selection a page at a time                        |
+| `home`/`end`     | Jump to the first or last task                             |
 | `enter`          | Read the task (see below)                                  |
 | `tab`            | Toggle list and board view                                 |
 | `/`              | Fuzzy filter (`enter` keeps it, `esc` clears it)           |
@@ -317,7 +319,7 @@ overwriting.
 In list view the selected task's details sit in a panel to the right of the
 list. `enter` moves focus into that panel, and the arrows (or `j`/`k`) then
 scroll the description instead of moving the selection: `pgup`/`pgdn` or
-`space` page through it, `g`/`G` jump to the top or bottom, and `esc` returns
+`space` page through it, `g`/`G` or `home`/`end` jump to the top or bottom, and `esc` returns
 to the list. `e`, `m` and `P` still act on the task while you read. Board view,
 and list view on a terminal narrower than 80 columns, have no room for the
 panel, so `enter` opens the task full screen instead, with the same keys.

@@ -927,6 +927,15 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
       setSelected((i) => Math.max(i - 1, 0));
       return;
     }
+    // A page is however many rows the list (or the focused board card) shows.
+    if (key.pageDown) {
+      setSelected((i) => Math.min(i + contentHeight, Math.max(list.length - 1, 0)));
+      return;
+    }
+    if (key.pageUp) {
+      setSelected((i) => Math.max(i - contentHeight, 0));
+      return;
+    }
     // Both of these are view state only — they never touch the store, so the
     // file on disk is identical before and after. Selection resets to the top
     // because the row under the cursor usually isn't the same row afterward.
@@ -982,25 +991,36 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
   // listener would flip the stream to flowing mode and silently steal bytes
   // from Ink's own parsing. `internal_eventEmitter` re-broadcasts the same
   // raw chunks Ink reads, without touching the stream's mode.
+  //
+  // Rebuilt every render, like `onDiskChange`, so the listener below can stay
+  // subscribed while still seeing the current mode, list and draft.
+  const onHomeEnd = useRef<(end: boolean) => void>(() => undefined);
+  onHomeEnd.current = (end) => {
+    if (legacy) return;
+    if (editMode) {
+      setEditCursor((c) => {
+        if (!end) return editDraft.lastIndexOf('\n', c - 1) + 1;
+        const lineEnd = editDraft.indexOf('\n', c);
+        return lineEnd === -1 ? editDraft.length : lineEnd;
+      });
+      return;
+    }
+    if (moveMode || priorityMode || filterMode) return;
+    if (reading) setDetailScroll(end ? (detail?.maxScroll ?? 0) : 0);
+    else setSelected(end ? Math.max(list.length - 1, 0) : 0);
+  };
   useEffect(() => {
-    if (!editMode) return;
     const onInput = (chunk: string) => {
       if (!chunk.startsWith('\u001B')) return;
       const rest = chunk.slice(1);
-      if (HOME_SEQUENCES.has(rest)) {
-        setEditCursor((c) => editDraft.lastIndexOf('\n', c - 1) + 1);
-      } else if (END_SEQUENCES.has(rest)) {
-        setEditCursor((c) => {
-          const lineEnd = editDraft.indexOf('\n', c);
-          return lineEnd === -1 ? editDraft.length : lineEnd;
-        });
-      }
+      if (HOME_SEQUENCES.has(rest)) onHomeEnd.current(false);
+      else if (END_SEQUENCES.has(rest)) onHomeEnd.current(true);
     };
     internalEventEmitter?.on('input', onInput);
     return () => {
       internalEventEmitter?.off('input', onInput);
     };
-  }, [editMode, editDraft, internalEventEmitter]);
+  }, [internalEventEmitter]);
 
   if (error) {
     return (

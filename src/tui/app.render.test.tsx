@@ -21,6 +21,10 @@ const KEYS = {
   enter: '\r',
   escape: '\u001B',
   down: '\u001B[B',
+  pageUp: '\u001B[5~',
+  pageDown: '\u001B[6~',
+  home: '\u001B[H',
+  end: '\u001B[F',
   tab: '\t',
 } as const;
 
@@ -153,6 +157,30 @@ describe('App layout', () => {
     await press(KEYS.enter, KEYS.escape, KEYS.down);
     expect(frame()).toContain('▏ #2 Short one');
     expect(frame()).toContain('Just a line.');
+  });
+
+  it('pages through the list and jumps to either end', async () => {
+    await store.mutate((d) => {
+      for (let i = 1; i <= 40; i++) {
+        addTask(d, { title: `Filler ${i}`, description: '', created: '2026-10-20' });
+      }
+    });
+    await start(120, 30);
+    const selectedId = () => Number(/▏ #(\d+)/.exec(frame())?.[1]);
+    expect(selectedId()).toBe(1);
+    await press(KEYS.pageDown);
+    const afterOnePage = selectedId();
+    expect(afterOnePage).toBeGreaterThan(10);
+    await press(KEYS.pageDown);
+    expect(selectedId()).toBe(2 * afterOnePage - 1);
+    await press(KEYS.pageUp, KEYS.pageUp);
+    expect(selectedId()).toBe(1);
+    await press(KEYS.end);
+    expect(selectedId()).toBe(42);
+    await press(KEYS.pageDown); // already at the bottom: stays put
+    expect(selectedId()).toBe(42);
+    await press(KEYS.home);
+    expect(selectedId()).toBe(1);
   });
 
   it('starts the next task at its top', async () => {
