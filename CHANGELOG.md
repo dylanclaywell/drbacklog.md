@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.7.0](https://github.com/dylanclaywell/drbacklog.md/compare/drbacklog-v0.6.0...drbacklog-v0.7.0) (2026-10-21)
+
+
+### Features
+
+* **tui:** page up/down and home/end in the task list ([9b35c5e](https://github.com/dylanclaywell/drbacklog.md/commit/9b35c5ed3e6ca7e675621b890b0283a22fee6390))
+* **tui:** resize the list and details panel with [ and ] ([1e24c5a](https://github.com/dylanclaywell/drbacklog.md/commit/1e24c5a4f6faa784275419b0139aebc32bda76d6))
+
+
+### Bug Fixes
+
+* **tui:** keep the first row visible when the list overflows ([129d9a9](https://github.com/dylanclaywell/drbacklog.md/commit/129d9a94ff66df90875505e148260a19c51f6202))
+
 ## [0.6.0](https://github.com/dylanclaywell/drbacklog.md/compare/drbacklog-v0.5.0...drbacklog-v0.6.0) (2026-10-20)
 
 
