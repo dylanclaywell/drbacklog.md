@@ -29,6 +29,7 @@ import {
   type PriorityFilter,
   type ViewOptions,
 } from './app.js';
+import { lineText } from './markdown.js';
 import {
   addTask,
   moveTask,
@@ -243,7 +244,7 @@ describe('detailLayout', () => {
 
   it('appends the resolution after a blank line and marks where it starts', () => {
     const layout = detailLayout(task({ description: 'done it', resolution: 'shipped' }), 40, 10);
-    expect(layout.bodyLines).toEqual(['done it', '', 'Resolution: shipped']);
+    expect(layout.bodyLines.map(lineText)).toEqual(['done it', '', 'Resolution: shipped']);
     expect(layout.resolutionStart).toBe(1);
   });
 });

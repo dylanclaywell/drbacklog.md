@@ -19,6 +19,7 @@ import { PRIORITIES, priorityFor, SECTIONS } from '../model.js';
 import { render as renderBacklog } from '../render.js';
 import { LegacyFormatError } from '../store.js';
 import type { BacklogStore } from '../store.js';
+import { renderMarkdown, type Span, type StyledLine } from './markdown.js';
 import { watchBacklog } from './watch.js';
 
 export interface AppProps {
@@ -163,8 +164,8 @@ export function wrapText(text: string, width: number): string[] {
 /** Where a task's details land in a panel of a given size. */
 export interface DetailLayout {
   titleLines: string[];
-  /** The scrolling part: the description, then the resolution if there is one. */
-  bodyLines: string[];
+  /** The scrolling part: the description, then the resolution if there is one, as markdown. */
+  bodyLines: StyledLine[];
   /** Index in `bodyLines` where the resolution starts (its length if there's none). */
   resolutionStart: number;
   /** How many body lines fit at once. */
@@ -180,9 +181,11 @@ export interface DetailLayout {
  */
 export function detailLayout(task: Task, width: number, height: number): DetailLayout {
   const titleLines = wrapText(`#${task.id} ${task.title}`, width);
-  const bodyLines = wrapText(task.description || '—', width);
+  const bodyLines = renderMarkdown(task.description || '—', width);
   const resolutionStart = bodyLines.length;
-  if (task.resolution) bodyLines.push('', ...wrapText(`Resolution: ${task.resolution}`, width));
+  if (task.resolution) {
+    bodyLines.push([], ...renderMarkdown(`Resolution: ${task.resolution}`, width));
+  }
   const bodyRows = Math.max(1, height - titleLines.length - 2 - 1);
   return {
     titleLines,
@@ -251,6 +254,14 @@ const THEME = {
     MEDIUM: '#fbbf24', // amber
     LOW: '#a3a3a3', // neutral — present, but not asking for attention
   } satisfies Record<TaskPriority, string>,
+  // Code in a description: a hue neither status nor priority uses, so it
+  // never reads as either.
+  code: '#f9a8d4', // pink
+  // Highlighted code reuses `code` for keywords and adds these two. Literals
+  // are pale enough to read as a tint of the code rather than as the TODO
+  // sky; comments are gray, receding the way they do in an editor.
+  literal: '#a5f3fc', // pale cyan
+  comment: 'gray',
 } as const;
 
 /**
@@ -303,16 +314,59 @@ function DetailView({
       <Text> </Text>
       <Box flexDirection="column" height={layout.bodyRows}>
         {shown.map((line, i) => (
-          // An empty <Text> renders no row at all; a space keeps blank lines.
-          <Text key={top + i} dimColor={top + i >= layout.resolutionStart}>
-            {line || ' '}
-          </Text>
+          <MarkdownRow key={top + i} line={line} dim={top + i >= layout.resolutionStart} />
         ))}
       </Box>
       <Box justifyContent="flex-end">
         <Text dimColor>{hint || ' '}</Text>
       </Box>
     </>
+  );
+}
+
+/**
+ * A description span's color. Highlighted code gets a color per role, with
+ * names and punctuation left in the normal text color so keywords stand out
+ * against them; code nobody highlighted is all `code` pink. Roles are told
+ * apart by color alone because bold and dim can't be relied on: Windows
+ * Terminal, by default, draws bold as a brighter shade, which a hex color
+ * doesn't have, and dimmed pink is too close to pink to read as different.
+ */
+function spanColor(span: Span): string | undefined {
+  switch (span.syntax) {
+    case 'keyword':
+      return THEME.code;
+    case 'literal':
+      return THEME.literal;
+    case 'comment':
+      return THEME.comment;
+    case 'plain':
+      return undefined;
+    default:
+      return span.code ? THEME.code : undefined;
+  }
+}
+
+/** One pre-wrapped row of a rendered description. */
+function MarkdownRow({ line, dim }: { line: StyledLine; dim: boolean }): React.ReactElement {
+  // An empty <Text> renders no row at all; a space keeps blank lines.
+  if (line.length === 0) return <Text> </Text>;
+  return (
+    <Text>
+      {line.map((span, i) => (
+        <Text
+          key={i}
+          bold={span.bold || span.syntax === 'keyword'}
+          italic={span.italic || span.syntax === 'comment'}
+          strikethrough={span.strike}
+          underline={span.underline}
+          color={spanColor(span)}
+          dimColor={dim || span.dim}
+        >
+          {span.text}
+        </Text>
+      ))}
+    </Text>
   );
 }
 
