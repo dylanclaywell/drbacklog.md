@@ -14,6 +14,7 @@ import { writeConfiguredPath } from './config.js';
 import { App } from './tui/app.js';
 import { flickerFreeStdout } from './tui/screen.js';
 import { promptForBacklogPath } from './tui/setup.js';
+import { checkForUpdate, updateChecksDisabled } from './update-check.js';
 
 // Enter the terminal's alternate screen buffer, same trick full-screen tools
 // like vim/less use: the TUI gets a blank full-height canvas, and whatever
@@ -64,7 +65,12 @@ async function main(): Promise<void> {
   const store = new BacklogStore(backlogPath);
   await store.ensureInitialized();
 
-  const { waitUntilExit } = render(React.createElement(App, { store, backlogPath }), {
+  // Started now, not awaited: the TUI opens immediately and the notice shows
+  // up whenever (if ever) the check returns. checkForUpdate never rejects.
+  const updateCheck =
+    process.stdout.isTTY && !updateChecksDisabled(process.env) ? checkForUpdate() : undefined;
+
+  const { waitUntilExit } = render(React.createElement(App, { store, backlogPath, updateCheck }), {
     // Only in a real terminal: the frame rewriting assumes a screen it owns.
     // Piped output gets Ink's plain frames.
     ...(process.stdout.isTTY ? { stdout: flickerFreeStdout(process.stdout) } : {}),

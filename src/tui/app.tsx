@@ -25,6 +25,8 @@ import { watchBacklog } from './watch.js';
 export interface AppProps {
   store: BacklogStore;
   backlogPath: string;
+  /** Resolves to a newer released version, or null; shown once in the status line. */
+  updateCheck?: Promise<string | null>;
 }
 
 const STATUS_ORDER: readonly TaskStatus[] = SECTIONS.map((s) => s.status);
@@ -621,7 +623,7 @@ export function stepListShare(columns: number, share: number, by: 1 | -1): numbe
   return next;
 }
 
-export function App({ store, backlogPath }: AppProps): React.ReactElement {
+export function App({ store, backlogPath, updateCheck }: AppProps): React.ReactElement {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const { internal_eventEmitter: internalEventEmitter } = useStdin();
@@ -691,6 +693,21 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
       .then((d) => setDoc(d))
       .catch(handleError);
   }, [store, handleError]);
+
+  // A newer release, if the background check finds one, goes in the status
+  // line — but only into an empty one, so it never hides an action's result.
+  useEffect(() => {
+    if (!updateCheck) return;
+    let live = true;
+    void updateCheck.then((version) => {
+      if (live && version) {
+        setStatus((prev) => prev || `drbacklog ${version} available — run: drbacklog update`);
+      }
+    });
+    return () => {
+      live = false;
+    };
+  }, [updateCheck]);
 
   // Migration only renames headings and the Admitted field; the same
   // `migrate: true` path the MCP tools take, behind the same rule that a

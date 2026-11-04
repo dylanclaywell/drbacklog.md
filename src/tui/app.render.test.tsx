@@ -277,3 +277,42 @@ describe('App layout', () => {
     });
   });
 });
+
+describe('App update notice', () => {
+  let dir: string;
+  let app: Instance | undefined;
+
+  afterEach(async () => {
+    app?.unmount();
+    app = undefined;
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function startWith(updateCheck: Promise<string | null>) {
+    dir = await mkdtemp(join(tmpdir(), 'drbacklog-render-'));
+    const store = new BacklogStore(join(dir, 'backlog.md'));
+    await store.mutate((d) => {
+      addTask(d, { title: 'A task', description: 'Body.', created: '2026-10-20' });
+    });
+    const term = fakeTerminal(120, 30);
+    app = render(<App store={store} backlogPath={store.path} updateCheck={updateCheck} />, {
+      stdout: term.stdout as unknown as NodeJS.WriteStream,
+      stdin: term.stdin as unknown as NodeJS.ReadStream,
+      debug: true,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    });
+    await settle(150);
+    return () => term.frames.at(-1) ?? '';
+  }
+
+  it('shows a newer release in the status line', async () => {
+    const frame = await startWith(Promise.resolve('9.9.9'));
+    expect(frame()).toContain('drbacklog 9.9.9 available — run: drbacklog update');
+  });
+
+  it('says nothing when there is no update', async () => {
+    const frame = await startWith(Promise.resolve(null));
+    expect(frame()).not.toContain('available');
+  });
+});
