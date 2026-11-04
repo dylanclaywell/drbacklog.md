@@ -30,7 +30,16 @@ async function main(): Promise<void> {
   );
 }
 
-main().catch((err: unknown) => {
+const argv = process.argv.slice(2);
+const run =
+  argv[0] === 'update'
+    ? // A terminal command, not the server: loaded only when asked for.
+      import('./update.js').then(async ({ runUpdateCommand }) => {
+        process.exitCode = await runUpdateCommand(argv.slice(1));
+      })
+    : main();
+
+run.catch((err: unknown) => {
   console.error(err);
   process.exitCode = 1;
 });

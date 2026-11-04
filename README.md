@@ -185,6 +185,26 @@ npm i -g ./drbacklog-<version>.tgz
 This puts a `drbacklog` command on your `PATH`; point your MCP config at that
 command name (see the `drbacklog` example below).
 
+### Updating
+
+```bash
+drbacklog update           # show what's new, ask, then install it
+drbacklog update --check   # just report; exits 1 when an update is available
+drbacklog update --yes     # install without asking
+```
+
+This checks the latest [GitHub Release](https://github.com/dylanclaywell/drbacklog.md/releases).
+For a global install (Option B) it downloads the release tarball, verifies it
+against the SHA-256 digest GitHub records for the asset, and runs
+`npm install -g` on it. For a git checkout (Option A) it tells you to
+`git pull && npm install && npm run build` instead of installing over it.
+Restart Claude Code afterwards so the MCP server picks up the new version.
+
+The TUI also checks, at most once a day (cached in `~/.drbacklog/`), and shows
+a one-line notice in its status bar when a newer release exists. It never
+installs anything itself. Set `DRBACKLOG_NO_UPDATE_CHECK=1` to turn the check
+off; it's also skipped when `CI` is set.
+
 ## Configure in Claude Code
 
 Add the server to your MCP config (e.g. a project-scoped `.mcp.json`).
