@@ -14,7 +14,7 @@ import {
   TaskNotFoundError,
   updateTask,
 } from '../operations.js';
-import type { BacklogDocument, Task, TaskPriority, TaskStatus } from '../model.js';
+import type { BacklogDocument, Epic, Task, TaskPriority, TaskStatus } from '../model.js';
 import { PRIORITIES, priorityFor, SECTIONS } from '../model.js';
 import { render as renderBacklog } from '../render.js';
 import { LegacyFormatError } from '../store.js';
@@ -196,6 +196,34 @@ export function detailLayout(task: Task, width: number, height: number): DetailL
   };
 }
 
+/** How far along an epic is: its tasks counted by status. */
+export interface EpicProgress {
+  total: number;
+  /** DONE plus CLOSED: tasks nobody needs to work on any more. */
+  resolved: number;
+  byStatus: Record<TaskStatus, number>;
+}
+
+export function epicProgress(doc: BacklogDocument, epicId: number): EpicProgress {
+  const byStatus: Record<TaskStatus, number> = { TODO: 0, DONE: 0, CLOSED: 0 };
+  for (const task of doc.tasks) if (task.epicId === epicId) byStatus[task.status]++;
+  return {
+    total: byStatus.TODO + byStatus.DONE + byStatus.CLOSED,
+    resolved: byStatus.DONE + byStatus.CLOSED,
+    byStatus,
+  };
+}
+
+/**
+ * An epic's tasks in the order the epics panel lists them: open work first,
+ * then done, then closed, each in file order.
+ */
+export function epicTasksByStatus(doc: BacklogDocument, epicId: number): Task[] {
+  return STATUS_ORDER.flatMap((s) =>
+    doc.tasks.filter((t) => t.epicId === epicId && t.status === s),
+  );
+}
+
 /** Every field a task carries, compared by value. */
 export function sameTask(a: Task, b: Task): boolean {
   return (
@@ -325,6 +353,74 @@ function DetailView({
 }
 
 /**
+ * An epic in a `width` x `height` area: its title, a count of its tasks by
+ * status, its description, then the tasks themselves. It doesn't scroll — the
+ * arrows belong to the epics list, and `enter` opens the full task list — so
+ * whatever doesn't fit is summed up in a "↓ N more" row at the bottom.
+ */
+function EpicDetailView({
+  epic,
+  doc,
+  width,
+  height,
+}: {
+  epic: Epic;
+  doc: BacklogDocument;
+  width: number;
+  height: number;
+}): React.ReactElement {
+  const progress = epicProgress(doc, epic.id);
+  const tasks = epicTasksByStatus(doc, epic.id);
+  const rows: React.ReactElement[] = [
+    ...wrapText(`#${epic.id} ${epic.title}`, width).map((line, i) => (
+      <Text key={`title-${i}`} bold>
+        {line}
+      </Text>
+    )),
+    <Text key="progress" wrap="truncate-end">
+      {progress.total === 0 ? (
+        <Text dimColor>no tasks yet</Text>
+      ) : (
+        STATUS_ORDER.map((s, i) => (
+          <Text key={s}>
+            {i > 0 && <Text dimColor> · </Text>}
+            <Text color={THEME.status[s]}>
+              {STATUS_PIP} {progress.byStatus[s]} {s}
+            </Text>
+          </Text>
+        ))
+      )}
+    </Text>,
+    <Text key="gap-1"> </Text>,
+    ...renderMarkdown(epic.description || '—', width).map((line, i) => (
+      <MarkdownRow key={`desc-${i}`} line={line} dim={false} />
+    )),
+    ...(tasks.length > 0 ? [<Text key="gap-2"> </Text>] : []),
+    ...tasks.map((task) => (
+      <Text key={`task-${task.id}`} wrap="truncate-end">
+        <Text color={THEME.status[task.status]}>{STATUS_PIP} </Text>
+        <Text dimColor>#{task.id} </Text>
+        <Text dimColor={task.status !== 'TODO'}>{task.title}</Text>
+        <PriorityMark priority={task.priority} />
+      </Text>
+    )),
+  ];
+  // Keep the last row for the hint only when something is actually cut off.
+  const fits = rows.length <= height;
+  const shown = fits ? rows : rows.slice(0, Math.max(height - 1, 0));
+  return (
+    <>
+      {shown}
+      {!fits && (
+        <Box justifyContent="flex-end">
+          <Text dimColor>↓ {rows.length - shown.length} more</Text>
+        </Box>
+      )}
+    </>
+  );
+}
+
+/**
  * A description span's color. Highlighted code gets a color per role, with
  * names and punctuation left in the normal text color so keywords stand out
  * against them; code nobody highlighted is all `code` pink. Roles are told
@@ -378,6 +474,9 @@ function MarkdownRow({ line, dim }: { line: StyledLine; dim: boolean }): React.R
  * rather than decoration.
  */
 const STATUS_PIP = '●';
+
+/** Marks the epics screen — a different shape, since an epic isn't a status. */
+const EPIC_GLYPH = '◆';
 
 /** Rows a board card's header + underline rule eat out of its assigned height. */
 const CARD_CHROME_ROWS = 2;
@@ -441,6 +540,8 @@ export interface ViewOptions {
   query: string;
   priorityFilter: PriorityFilter;
   sortMode: SortMode;
+  /** Show only this epic's tasks — set by picking an epic in the epics view. */
+  epicFilter?: number;
 }
 
 /**
@@ -453,7 +554,11 @@ export function tasksForTab(doc: BacklogDocument, tab: TaskStatus, view: ViewOpt
     view.query.trim().length === 0
       ? doc.tasks.filter((t) => t.status === tab)
       : findTasks(doc, { query: view.query, status: tab, limit: 200 });
-  const filtered = base.filter((t) => matchesPriorityFilter(t, view.priorityFilter));
+  const filtered = base.filter(
+    (t) =>
+      matchesPriorityFilter(t, view.priorityFilter) &&
+      (view.epicFilter === undefined || t.epicId === view.epicFilter),
+  );
   // Only re-sort when priority order was actually asked for: in 'file' mode a
   // filtered list is in fuzzy-rank order, which is itself meaningful and would
   // be destroyed by sorting. `slice` keeps the sort off the array findTasks or
@@ -560,6 +665,13 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
   // Only for this session: saving it would mean deciding whether it's a
   // per-backlog or a per-user setting.
   const [listShare, setListShare] = useState(DEFAULT_LIST_SHARE);
+  // The epics screen sits over whichever task view (list or board) was up,
+  // so leaving it lands back where you were.
+  const [showingEpics, setShowingEpics] = useState(false);
+  const [epicSelected, setEpicSelected] = useState(0);
+  // Display-only, like the priority filter: picking an epic narrows the task
+  // views to its tasks until `esc` clears it.
+  const [epicFilter, setEpicFilter] = useState<number | undefined>(undefined);
   const [status, setStatus] = useState<string>('');
   // True while the file is in the pre-rename format and the user hasn't yet
   // said whether to migrate it. Its own screen, not an error: it's answerable.
@@ -598,9 +710,17 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
 
   useEffect(reload, [reload]);
 
-  const view: ViewOptions = { query, priorityFilter, sortMode };
+  // An epic removed on disk (by an agent, say) stops filtering rather than
+  // leaving every tab mysteriously empty. Ids are never reused, so it can't
+  // come back as a different epic.
+  const filterEpic =
+    epicFilter === undefined ? undefined : doc?.epics.find((e) => e.id === epicFilter);
+  const view: ViewOptions = { query, priorityFilter, sortMode, epicFilter: filterEpic?.id };
   const list = doc ? tasksForTab(doc, tab, view) : [];
   const activeTask = list[selected];
+  const epics = doc?.epics ?? [];
+  const epicIndex = Math.max(0, Math.min(epicSelected, epics.length - 1));
+  const activeEpic = epics[epicIndex];
 
   // A different task starts at its top, not wherever the last one was scrolled.
   useEffect(() => setDetailScroll(0), [activeTask?.id]);
@@ -646,7 +766,9 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
 
   useEffect(() => watchBacklog(store.path, () => onDiskChange.current()), [store]);
 
-  const chromeHeight = BASE_CHROME_HEIGHT + (viewMode === 'list' ? TAB_BAR_ROWS : 0);
+  // The epics screen uses the tab bar's row for its own heading.
+  const chromeHeight =
+    BASE_CHROME_HEIGHT + (viewMode === 'list' || showingEpics ? TAB_BAR_ROWS : 0);
   const listHeight = Math.max(screenRows - chromeHeight, 3);
   // Board cards spend a few of their assigned rows on a border and header, so
   // fewer rows are left for items than in the single-column list view. A list
@@ -663,24 +785,31 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
   const visibleStart = Math.min(Math.max(0, selected - contentHeight + 1), maxStart);
   const visible = list.slice(visibleStart, visibleStart + contentHeight);
 
+  // The epics list scrolls the same way the task list does.
+  const epicRows = epics.length > listHeight ? Math.max(listHeight - 1, 1) : listHeight;
+  const epicMaxStart = Math.max(0, epics.length - epicRows);
+  const epicVisibleStart = Math.min(Math.max(0, epicIndex - epicRows + 1), epicMaxStart);
+  const visibleEpics = epics.slice(epicVisibleStart, epicVisibleStart + epicRows);
+
   const columns = stdout.columns || 80;
-  const showPanel = viewMode === 'list' && columns >= MIN_PANEL_COLUMNS;
+  const showPanel = (viewMode === 'list' || showingEpics) && columns >= MIN_PANEL_COLUMNS;
   const listWidth = showPanel ? listColumnWidth(columns, listShare) : columns;
   const panelWidth = columns - listWidth - PANEL_GAP;
   const fullScreenReader = reading && !showPanel;
   // Laid out here, ahead of the input handler, so the scroll keys clamp and
   // page by exactly what's drawn.
-  const detail = !activeTask
-    ? null
-    : fullScreenReader
-      ? detailLayout(activeTask, columns - 2, screenRows - READER_FOOTER_ROWS)
-      : showPanel
-        ? detailLayout(
-            activeTask,
-            panelWidth - PANEL_CHROME_COLUMNS,
-            listHeight - PANEL_CHROME_ROWS,
-          )
-        : null;
+  const detail =
+    !activeTask || showingEpics
+      ? null
+      : fullScreenReader
+        ? detailLayout(activeTask, columns - 2, screenRows - READER_FOOTER_ROWS)
+        : showPanel
+          ? detailLayout(
+              activeTask,
+              panelWidth - PANEL_CHROME_COLUMNS,
+              listHeight - PANEL_CHROME_ROWS,
+            )
+          : null;
 
   /**
    * Reload from disk, keeping the cursor on task `id` if it's still in view
@@ -693,7 +822,7 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
         setDoc(d);
         setSelected(selectionAfterChange(tasksForTab(d, tab, view), id, previous));
       }),
-    [store, tab, query, priorityFilter, sortMode],
+    [store, tab, query, priorityFilter, sortMode, view.epicFilter],
   );
 
   /**
@@ -912,6 +1041,43 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
       return;
     }
 
+    // Read-only: nothing on the epics screen writes to backlog.md.
+    if (showingEpics) {
+      if (input === 'q' || (input === 'c' && key.ctrl)) {
+        exit();
+        return;
+      }
+      if (key.escape || input === 'E') {
+        setShowingEpics(false);
+        return;
+      }
+      if (key.return && activeEpic) {
+        setEpicFilter(activeEpic.id);
+        setShowingEpics(false);
+        setSelected(0);
+        setStatus(`showing epic #${activeEpic.id}'s tasks · esc shows all`);
+        return;
+      }
+      const last = Math.max(epics.length - 1, 0);
+      if (input === 'j' || key.downArrow) setEpicSelected(Math.min(epicIndex + 1, last));
+      else if (input === 'k' || key.upArrow) setEpicSelected(Math.max(epicIndex - 1, 0));
+      else if (key.pageDown) setEpicSelected(Math.min(epicIndex + epicRows, last));
+      else if (key.pageUp) setEpicSelected(Math.max(epicIndex - epicRows, 0));
+      else if (input === 'r') {
+        reload();
+        setStatus('reloaded');
+      } else if ((input === '[' || input === ']') && showPanel) {
+        const next = stepListShare(columns, listShare, input === ']' ? 1 : -1);
+        if (next === undefined) {
+          setStatus(input === ']' ? 'list is as wide as it goes' : 'list is as narrow as it goes');
+        } else {
+          setListShare(next);
+          setStatus(`list ${next}% · panel ${100 - next}%`);
+        }
+      }
+      return;
+    }
+
     if (reading) {
       if (key.escape) {
         setReading(false);
@@ -962,6 +1128,19 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
     }
     if (input === '/') {
       setFilterMode(true);
+      return;
+    }
+    if (input === 'E') {
+      // Open on the epic being filtered by, so enter-then-E is a round trip.
+      const at = epics.findIndex((e) => e.id === filterEpic?.id);
+      if (at !== -1) setEpicSelected(at);
+      setShowingEpics(true);
+      return;
+    }
+    if (key.escape && filterEpic) {
+      setEpicFilter(undefined);
+      setSelected(0);
+      setStatus('showing tasks from every epic');
       return;
     }
     if (key.return && activeTask) {
@@ -1103,7 +1282,8 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
       return;
     }
     if (moveMode || priorityMode || filterMode) return;
-    if (reading) setDetailScroll(end ? (detail?.maxScroll ?? 0) : 0);
+    if (showingEpics) setEpicSelected(end ? Math.max(epics.length - 1, 0) : 0);
+    else if (reading) setDetailScroll(end ? (detail?.maxScroll ?? 0) : 0);
     else setSelected(end ? Math.max(list.length - 1, 0) : 0);
   };
   useEffect(() => {
@@ -1319,30 +1499,40 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
   }
 
   // While the panel has focus only its keys do anything, so only they're shown.
-  const shortcuts: ReadonlyArray<readonly [string, string]> = reading
+  const shortcuts: ReadonlyArray<readonly [string, string]> = showingEpics
     ? [
-        ['↑↓ j/k', 'scroll'],
-        ['pgup/pgdn', 'page'],
-        ['g/G', 'top/bottom'],
-        ['e', 'edit description'],
-        ['m', 'move task'],
-        ['P', 'set priority'],
-        ['esc', 'back to list'],
-      ]
-    : [
-        ['←/→ 1/2/3', 'switch list'],
         ['j/k', 'move'],
-        ['enter', 'read'],
-        ['tab', viewMode === 'list' ? 'board view' : 'list view'],
-        ['/', 'filter'],
-        ['s', sortMode === 'file' ? 'sort by priority' : 'sort by file order'],
-        ['p', `priority: ${priorityFilterLabel(priorityFilter)}`],
-        ['m', 'move task'],
-        ['P', 'set priority'],
-        ['e', 'edit description'],
+        ['enter', 'show its tasks'],
+        ['esc/E', 'back'],
         ['r', 'reload'],
         ['q', 'quit'],
-      ];
+      ]
+    : reading
+      ? [
+          ['↑↓ j/k', 'scroll'],
+          ['pgup/pgdn', 'page'],
+          ['g/G', 'top/bottom'],
+          ['e', 'edit description'],
+          ['m', 'move task'],
+          ['P', 'set priority'],
+          ['esc', 'back to list'],
+        ]
+      : [
+          ['←/→ 1/2/3', 'switch list'],
+          ['j/k', 'move'],
+          ['enter', 'read'],
+          ['tab', viewMode === 'list' ? 'board view' : 'list view'],
+          ['/', 'filter'],
+          ['s', sortMode === 'file' ? 'sort by priority' : 'sort by file order'],
+          ['p', `priority: ${priorityFilterLabel(priorityFilter)}`],
+          ['m', 'move task'],
+          ['P', 'set priority'],
+          ['e', 'edit description'],
+          ['E', 'epics'],
+          ...(filterEpic ? [['esc', 'all epics'] as const] : []),
+          ['r', 'reload'],
+          ['q', 'quit'],
+        ];
 
   return (
     <Box key="main-screen" flexDirection="column" width={stdout.columns} height={screenRows}>
@@ -1372,7 +1562,16 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
         borderBottomColor={THEME.rule}
         borderBottomDimColor
       />
-      {viewMode === 'list' && (
+      {showingEpics && (
+        <Box marginTop={1}>
+          <Text color={THEME.accent}>{EPIC_GLYPH} </Text>
+          <Text bold underline color={THEME.accent}>
+            EPICS
+          </Text>
+          <Text dimColor> ({epics.length})</Text>
+        </Box>
+      )}
+      {viewMode === 'list' && !showingEpics && (
         <Box marginTop={1}>
           {STATUS_ORDER.map((s, i) => (
             <Box key={s} marginRight={i < STATUS_ORDER.length - 1 ? 3 : 0}>
@@ -1385,7 +1584,18 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
         </Box>
       )}
       <Box marginTop={1}>
-        {moveMode && activeTask ? (
+        {showingEpics ? (
+          <Box>
+            <Text dimColor>Epic filter </Text>
+            {filterEpic ? (
+              <Text wrap="truncate-end" color={THEME.accent}>
+                #{filterEpic.id} {filterEpic.title}
+              </Text>
+            ) : (
+              <Text>—</Text>
+            )}
+          </Box>
+        ) : moveMode && activeTask ? (
           <Box>
             <Text color={THEME.accent}>Move </Text>
             <Text bold>#{activeTask.id}</Text>
@@ -1449,10 +1659,87 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
                 </Text>
               </>
             )}
+            {filterEpic && (
+              <>
+                <Text dimColor> · epic </Text>
+                <Text wrap="truncate-end" color={THEME.accent}>
+                  #{filterEpic.id} {filterEpic.title}
+                </Text>
+              </>
+            )}
           </Box>
         )}
       </Box>
-      {viewMode === 'board' ? (
+      {showingEpics ? (
+        <Box marginTop={1} flexDirection="row" flexGrow={1} height={listHeight}>
+          <Box flexDirection="column" width={listWidth} height={listHeight}>
+            {epics.length === 0 && (
+              <Text dimColor>No epics yet. Agents can add them with the add_epic tool.</Text>
+            )}
+            {visibleEpics.map((epic, i) => {
+              const isSelected = epicVisibleStart + i === epicIndex;
+              const progress = epicProgress(doc, epic.id);
+              return (
+                <Box key={epic.id} width={listWidth}>
+                  <Box flexGrow={1} flexShrink={1}>
+                    <Text wrap="truncate-end">
+                      <Text color={isSelected ? THEME.accent : undefined}>
+                        {isSelected ? '▏ ' : '  '}
+                      </Text>
+                      <Text dimColor={!isSelected}>#{epic.id} </Text>
+                      <Text bold={isSelected} color={isSelected ? THEME.accent : undefined}>
+                        {epic.title}
+                      </Text>
+                    </Text>
+                  </Box>
+                  {/* Outside the truncated text, so a long title can't push it off. */}
+                  <Box flexShrink={0} marginLeft={1}>
+                    <Text
+                      color={
+                        progress.total > 0 && progress.resolved === progress.total
+                          ? THEME.status.DONE
+                          : undefined
+                      }
+                      dimColor={progress.total === 0 || progress.resolved < progress.total}
+                    >
+                      {progress.resolved}/{progress.total}
+                    </Text>
+                  </Box>
+                </Box>
+              );
+            })}
+            {epicMaxStart > 0 && (
+              <Text dimColor>
+                [{epicVisibleStart + 1}-{Math.min(epicVisibleStart + epicRows, epics.length)} of{' '}
+                {epics.length}]
+              </Text>
+            )}
+          </Box>
+          {showPanel && (
+            <Box
+              flexDirection="column"
+              marginLeft={PANEL_GAP}
+              width={panelWidth}
+              height={listHeight}
+              borderStyle="round"
+              borderColor={THEME.rule}
+              borderDimColor
+              paddingX={1}
+            >
+              {activeEpic ? (
+                <EpicDetailView
+                  epic={activeEpic}
+                  doc={doc}
+                  width={panelWidth - PANEL_CHROME_COLUMNS}
+                  height={listHeight - PANEL_CHROME_ROWS}
+                />
+              ) : (
+                <Text dimColor>Nothing selected</Text>
+              )}
+            </Box>
+          )}
+        </Box>
+      ) : viewMode === 'board' ? (
         <Box marginTop={1} flexDirection="row" flexGrow={1} height={listHeight}>
           {STATUS_ORDER.map((s) => renderCard(s))}
         </Box>
@@ -1463,11 +1750,13 @@ export function App({ store, backlogPath }: AppProps): React.ReactElement {
               <Text dimColor>
                 {query.trim()
                   ? `No matches for “${query}”.`
-                  : priorityFilter !== undefined
-                    ? // Naming the filter matters here: without it an empty list
-                      // reads as "this tab is empty" when really it's hidden.
-                      `Nothing in ${tab.toLowerCase()} at ${priorityFilterLabel(priorityFilter)} priority.`
-                    : `Nothing in ${tab.toLowerCase()} yet.`}
+                  : filterEpic
+                    ? `Nothing in ${tab.toLowerCase()} for epic #${filterEpic.id}.`
+                    : priorityFilter !== undefined
+                      ? // Naming the filter matters here: without it an empty list
+                        // reads as "this tab is empty" when really it's hidden.
+                        `Nothing in ${tab.toLowerCase()} at ${priorityFilterLabel(priorityFilter)} priority.`
+                      : `Nothing in ${tab.toLowerCase()} yet.`}
               </Text>
             )}
             {visible.map((task, i) => {

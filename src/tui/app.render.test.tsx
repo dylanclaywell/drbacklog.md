@@ -14,7 +14,7 @@ import { render, type Instance } from 'ink';
 import React from 'react';
 
 import { App } from './app.js';
-import { addTask } from '../operations.js';
+import { addEpic, addTask, setTaskEpic } from '../operations.js';
 import { BacklogStore } from '../store.js';
 
 const KEYS = {
@@ -225,5 +225,55 @@ describe('App layout', () => {
     await press(KEYS.enter);
     expect(frame()).toContain('Paragraph line 1 of');
     expect(lines().length).toBeLessThanOrEqual(24);
+  });
+
+  describe('epics view', () => {
+    beforeEach(async () => {
+      await store.mutate((d) => {
+        addEpic(d, { title: 'Reading', description: 'Everything about the reader.' });
+        addEpic(d, { title: 'Empty epic', description: '' });
+        setTaskEpic(d, { id: 2, epicId: 1 });
+      });
+    });
+
+    it('lists epics with their progress and shows the selected one beside them', async () => {
+      await start(120, 30);
+      await press('E');
+      expect(frame()).toContain('EPICS (2)');
+      expect(lines().some((l) => /#1 Reading\s+0\/1/.test(l))).toBe(true);
+      expect(lines().some((l) => /#2 Empty epic\s+0\/0/.test(l))).toBe(true);
+      expect(frame()).toContain('Everything about the reader.');
+      expect(frame()).toContain('● 1 TODO');
+      expect(frame()).toContain('#2 Short one');
+      await press(KEYS.down);
+      expect(frame()).toContain('no tasks yet');
+    });
+
+    it('filters the task list to the chosen epic until esc', async () => {
+      await start(120, 30);
+      await press('E', KEYS.enter);
+      expect(frame()).not.toContain('EPICS');
+      expect(frame()).toContain('epic #1 Reading');
+      expect(frame()).toContain('▏ #2 Short one');
+      expect(frame()).not.toContain('#1 Long one');
+      await press(KEYS.escape);
+      expect(frame()).toContain('▏ #1 Long one');
+      expect(frame()).not.toContain('epic #1 Reading');
+    });
+
+    it('goes back to the task view it came from', async () => {
+      await start(120, 30);
+      await press(KEYS.tab, 'E');
+      expect(frame()).toContain('EPICS');
+      await press(KEYS.escape);
+      expect(frame()).not.toContain('EPICS');
+      expect(frame()).toContain('CLOSED (0)'); // a board card header
+    });
+
+    it('draws the epics screen one row shorter than the terminal', async () => {
+      await start(120, 30);
+      await press('E');
+      expect(frame().replace(/\n$/, '').split('\n').length).toBeLessThan(30);
+    });
   });
 });

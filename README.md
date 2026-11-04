@@ -314,6 +314,7 @@ overwriting.
 | `m`              | Move the task to another status                            |
 | `P`              | Set or clear the task's priority                           |
 | `e`              | Edit the description (`ctrl+s` saves, `esc` discards)      |
+| `E`              | Show epics (see below)                                     |
 | `r`              | Reload from disk                                           |
 | `q`              | Quit                                                       |
 
@@ -324,6 +325,12 @@ scroll the description instead of moving the selection: `pgup`/`pgdn` or
 to the list. `e`, `m` and `P` still act on the task while you read. Board view,
 and list view on a terminal narrower than 80 columns, have no room for the
 panel, so `enter` opens the task full screen instead, with the same keys.
+
+`E` lists the backlog's epics, each with how many of its tasks are resolved
+(DONE or CLOSED) out of the total. Beside the list is the selected epic's
+description and its tasks. `enter` goes back to the task list or board showing
+only that epic's tasks. Like the other filters, this one is view only, and
+`esc` clears it. `esc` or `E` leaves the epics screen without filtering.
 
 ## Tools
 

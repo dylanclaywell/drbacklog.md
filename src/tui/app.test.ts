@@ -13,6 +13,8 @@ import {
   assertTaskUnchanged,
   DEFAULT_LIST_SHARE,
   detailLayout,
+  epicProgress,
+  epicTasksByStatus,
   listColumnWidth,
   matchesPriorityFilter,
   MAX_LIST_SHARE,
@@ -31,9 +33,11 @@ import {
 } from './app.js';
 import { lineText } from './markdown.js';
 import {
+  addEpic,
   addTask,
   moveTask,
   removeTask,
+  setTaskEpic,
   setTaskPriority,
   TaskNotFoundError,
   updateTask,
@@ -430,5 +434,43 @@ describe('tasksForTab', () => {
     tasksForTab(doc, 'TODO', view({ sortMode: 'priority', priorityFilter: 'HIGH' }));
     tasksForTab(doc, 'TODO', view({ sortMode: 'priority', query: 'one' }));
     expect(doc.tasks.map((t) => t.id)).toEqual(before);
+  });
+});
+
+describe('epics', () => {
+  /** Epic #1 with one task in each status (added out of status order), plus an unlinked task. */
+  function epicDoc(): BacklogDocument {
+    const doc = createEmptyDocument();
+    const epic = addEpic(doc, { title: 'Parser hardening', description: '' });
+    const add = (title: string, status: 'TODO' | 'DONE' | 'CLOSED', linked = true) => {
+      const task = addTask(doc, { title, description: '', created: '2026-11-04' });
+      if (status !== 'TODO') moveTask(doc, { id: task.id, status });
+      if (linked) setTaskEpic(doc, { id: task.id, epicId: epic.id });
+    };
+    add('shipped', 'DONE');
+    add('open', 'TODO');
+    add('dropped', 'CLOSED');
+    add('unrelated', 'TODO', false);
+    return doc;
+  }
+
+  it("counts an epic's tasks by status, with DONE and CLOSED as resolved", () => {
+    expect(epicProgress(epicDoc(), 1)).toEqual({
+      total: 3,
+      resolved: 2,
+      byStatus: { TODO: 1, DONE: 1, CLOSED: 1 },
+    });
+    expect(epicProgress(epicDoc(), 99).total).toBe(0);
+  });
+
+  it("lists an epic's tasks open first, then done, then closed", () => {
+    expect(titles(epicTasksByStatus(epicDoc(), 1))).toEqual(['open', 'shipped', 'dropped']);
+  });
+
+  it("narrows a tab to one epic's tasks", () => {
+    const doc = epicDoc();
+    expect(titles(tasksForTab(doc, 'TODO', view()))).toEqual(['open', 'unrelated']);
+    expect(titles(tasksForTab(doc, 'TODO', view({ epicFilter: 1 })))).toEqual(['open']);
+    expect(titles(tasksForTab(doc, 'DONE', view({ epicFilter: 1 })))).toEqual(['shipped']);
   });
 });
