@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.8.0](https://github.com/dylanclaywell/drbacklog.md/compare/drbacklog-v0.7.0...drbacklog-v0.8.0) (2026-11-04)
+
+
+### Features
+
+* **cli:** add drbacklog update to install the latest GitHub release ([2eb5223](https://github.com/dylanclaywell/drbacklog.md/commit/2eb5223864543c2fc4ac6e4c1fac8e8a6f64dce3))
+* **tui:** add an epics view, with a filter by epic ([c9b052b](https://github.com/dylanclaywell/drbacklog.md/commit/c9b052b3ecc6b95f9a6e0c54d8ee811733b6c728))
+* **tui:** show a notice when a newer release is available ([eb254b1](https://github.com/dylanclaywell/drbacklog.md/commit/eb254b1191a11e48a5401fdb2f3ec173d592f1c5))
+* **tui:** show task details as markdown, with highlighted code ([585f04b](https://github.com/dylanclaywell/drbacklog.md/commit/585f04baca164bb58a479d42e15bf18ac7721883))
+
+
+### Chores
+
+* **backlog:** add sample epics and tasks for the TUI ([50b2a2c](https://github.com/dylanclaywell/drbacklog.md/commit/50b2a2c4a04afb5f9acd41feb58281f69f8e9a04))
+
 ## [0.7.0](https://github.com/dylanclaywell/drbacklog.md/compare/drbacklog-v0.6.0...drbacklog-v0.7.0) (2026-10-21)
 
 
